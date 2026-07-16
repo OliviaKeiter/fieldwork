@@ -1,0 +1,12 @@
+---
+import AppShell from '../layouts/AppShell.astro';
+import PipelineBoard from '../components/PipelineBoard';
+---
+
+<AppShell
+  title="Pipeline"
+  active="pipeline"
+  description="Every role you are tracking, by stage. Drag a card between columns to move its status."
+>
+  <PipelineBoard client:load />
+</AppShell>

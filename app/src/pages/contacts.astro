@@ -1,0 +1,12 @@
+---
+import AppShell from '../layouts/AppShell.astro';
+import ContactsTable from '../components/ContactsTable';
+---
+
+<AppShell
+  title="Contacts"
+  active="contacts"
+  description="Everyone you're staying in touch with, and when you last spoke."
+>
+  <ContactsTable client:load />
+</AppShell>

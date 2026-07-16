@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Fieldwork: a seedling in the app's warm palette — every application is a sprout. -->
+  <rect width="128" height="128" rx="28" fill="#221d18"/>
+  <!-- sun -->
+  <circle cx="92" cy="36" r="12" fill="#e08a3c"/>
+  <!-- stem -->
+  <path d="M56 104 C56 84 56 72 60 58" stroke="#8fae6c" stroke-width="7" stroke-linecap="round" fill="none"/>
+  <!-- left leaf -->
+  <path d="M58 76 C42 74 32 64 30 48 C46 50 56 60 58 76 Z" fill="#8fae6c"/>
+  <!-- right leaf -->
+  <path d="M60 62 C62 44 72 34 88 32 C86 48 76 58 60 62 Z" fill="#a9c283"/>
+  <!-- soil -->
+  <path d="M36 104 L76 104" stroke="#e08a3c" stroke-width="7" stroke-linecap="round"/>
+</svg>

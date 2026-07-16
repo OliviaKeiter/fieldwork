@@ -1,0 +1,69 @@
+---
+import '../styles/global.css';
+import Sidebar from '../components/Sidebar';
+import SessionGuard from '../components/SessionGuard';
+import type { NavKey } from '../components/Sidebar';
+
+interface Props {
+  title: string;
+  active: NavKey;
+  /** One line under the page title saying what the screen is for. Every page
+   *  gets one, so the header block is identical everywhere. */
+  description?: string;
+}
+
+const { title, active, description } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>{title} · Fieldwork</title>
+    <script is:inline>
+      // Apply persisted theme AND sidebar width before paint. Both are plain
+      // attributes on <html> that CSS keys off, so the first frame is already
+      // correct and React only reads them back on mount — no flash, no snap.
+      (function () {
+        var root = document.documentElement;
+        try {
+          root.setAttribute('data-theme', window.localStorage.getItem('fieldwork-theme') || 'dark');
+        } catch (e) {
+          root.setAttribute('data-theme', 'dark');
+        }
+        try {
+          root.setAttribute(
+            'data-sidebar',
+            window.localStorage.getItem('fieldwork-sidebar') || 'expanded'
+          );
+        } catch (e) {
+          root.setAttribute('data-sidebar', 'expanded');
+        }
+      })();
+    </script>
+  </head>
+  <body class="bg-bg text-text">
+    <SessionGuard client:load />
+    <a
+      href="#main"
+      class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:border focus:border-border focus:bg-surface-2 focus:px-3 focus:py-2 focus:text-sm focus:text-text"
+    >
+      Skip to content
+    </a>
+    <div class="flex min-h-screen">
+      <Sidebar active={active} client:load />
+      <main id="main" class="min-w-0 flex-1">
+        <div class="mx-auto w-full max-w-6xl px-8 py-8">
+          <header class="mb-8">
+            <slot name="breadcrumb" />
+            <h1 class="text-2xl font-semibold tracking-tight text-text">{title}</h1>
+            {description && <p class="mt-1.5 max-w-2xl text-sm text-text-dim">{description}</p>}
+          </header>
+          <slot />
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

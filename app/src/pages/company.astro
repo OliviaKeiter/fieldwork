@@ -1,0 +1,14 @@
+---
+import AppShell from '../layouts/AppShell.astro';
+import DossierRouter from '../components/DossierRouter';
+import Breadcrumb from '../components/Breadcrumb.astro';
+---
+
+<AppShell
+  title="Dossier"
+  active="company"
+  description="Everything on one role: the timeline, the JD, the resume you sent, contacts, prep, and history."
+>
+  <Breadcrumb slot="breadcrumb" href="/pipeline" label="Pipeline" />
+  <DossierRouter client:load />
+</AppShell>

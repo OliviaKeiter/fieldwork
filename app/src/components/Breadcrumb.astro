@@ -1,0 +1,32 @@
+---
+/* A single "up one level" link, sitting above the page title.
+ *
+ * Fieldwork is two levels deep at most (Pipeline > Dossier, Settings >
+ * Onboarding), so a full breadcrumb trail would be ceremony. One back link,
+ * always in the same spot, is the whole job. */
+interface Props {
+  href: string;
+  label: string;
+}
+
+const { href, label } = Astro.props;
+---
+
+<a
+  href={href}
+  class="group mb-3 inline-flex items-center gap-1.5 text-sm text-text-dim transition-colors hover:text-text"
+>
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.75"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    class="h-4 w-4 transition-transform group-hover:-translate-x-0.5"
+    aria-hidden="true"
+  >
+    <path d="M14.5 5.5L8 12l6.5 6.5"></path>
+  </svg>
+  <span>{label}</span>
+</a>

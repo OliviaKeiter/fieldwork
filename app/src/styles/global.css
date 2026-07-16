@@ -1,0 +1,312 @@
+@import "tailwindcss";
+
+/*
+  Fieldwork design tokens — warm, calm, dark-first.
+  Palette: warm near-black + terracotta/amber accent + soft moss-green
+  secondary, muted brick-red for danger. Deliberately not corporate blue.
+*/
+
+:root {
+  color-scheme: dark;
+
+  --bg: #17140f;
+  --surface: #221d18;
+  --surface-2: #2c261f;
+  --text: #f1ece3;
+  --text-dim: #a89c8c;
+  --accent: #e08a3c;
+  --accent-2: #8fae6c;
+  --danger: #c65b4a;
+  --success: #8fae6c;
+  --border: rgba(241, 236, 227, 0.08);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #faf6f0;
+  --surface: #ffffff;
+  --surface-2: #f0e9de;
+  --text: #2b2620;
+  --text-dim: #6b6055;
+  --accent: #c9702f;
+  --accent-2: #5f7a53;
+  --danger: #b04a3a;
+  --success: #5f7a53;
+  --border: rgba(43, 38, 32, 0.08);
+}
+
+@theme {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-text: var(--text);
+  --color-text-dim: var(--text-dim);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --color-border: var(--border);
+}
+
+html,
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  min-height: 100%;
+}
+
+/*
+  Sidebar rail.
+
+  The collapsed/expanded state is a `data-sidebar` attribute on <html>, set by
+  the inline script in AppShell before first paint and flipped by Sidebar.tsx.
+  Driving the visuals from CSS (rather than React state) is what keeps the rail
+  from flashing at its wrong width on every page load — Astro ships static HTML
+  and the island hydrates a beat later, so React is always too late to be the
+  source of truth here.
+*/
+
+.fw-sidebar {
+  width: 15rem;
+  transition: width 160ms ease;
+}
+
+[data-sidebar="collapsed"] .fw-sidebar {
+  width: 4.25rem;
+}
+
+/* Anything that only makes sense next to a label: labels, hints, group titles. */
+[data-sidebar="collapsed"] .fw-collapsible {
+  display: none;
+}
+
+/* Collapsed, the icons center themselves in the rail. */
+[data-sidebar="collapsed"] .fw-nav-link {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* The group headings become rules, so "Work" vs "Record" survives the collapse. */
+[data-sidebar="collapsed"] .fw-group-rule {
+  display: block;
+}
+
+/* Tooltips are the collapsed rail's only labels, so they exist only there. */
+.fw-tooltip {
+  display: none;
+}
+
+[data-sidebar="collapsed"] .fw-tooltip {
+  display: block;
+}
+
+[data-sidebar="collapsed"] .fw-nav-link:hover .fw-tooltip,
+[data-sidebar="collapsed"] .fw-nav-link:focus-visible .fw-tooltip {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fw-sidebar {
+    transition: none;
+  }
+}
+
+* {
+  border-color: var(--border);
+}
+
+/* Print / "Save as PDF" support for the resume Studio (SPEC.md §6/§9): #resume-print-root
+   is rendered off-screen while a print is pending, then shown full-page and everything
+   else hidden for window.print(). No server-side PDF generation.
+
+   The tpl-* class on the root selects one of the two LAYOUT looks, ported from the real
+   .docx templates the renderers in resumeDocx.ts were ported from, so the printed PDF
+   matches its .docx sibling:
+   - tpl-two-column  Arial, rule-under-contact header, tinted sidebar (page 1 only —
+                     overflow continues full width in .resume-print-fullwidth)
+   - tpl-editorial   Georgia, tinted name band, thin section rules
+   The COLOR comes from inline CSS variables renderResumePrintHtml sets on the root:
+   --rp-accent / --rp-soft / --rp-fill (one of the six palettes in resumeDocx.ts). */
+#resume-print-root {
+  display: none;
+}
+
+@media print {
+  /* Base page margins (editorial default: 0.375in top/bottom, 0.5in sides, matching the
+     .docx section margins). renderResumePrintHtml emits a per-layout @page override so
+     each printed PDF mirrors its .docx sibling exactly (two-column: 0.5in all). */
+  @page {
+    margin: 0.375in 0.5in;
+  }
+  body * {
+    visibility: hidden;
+  }
+  #resume-print-root,
+  #resume-print-root * {
+    visibility: visible;
+  }
+  #resume-print-root {
+    display: block;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    color: #1f1f1f;
+    background: #fff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  #resume-print-root p {
+    font-size: 9pt;
+    margin: 0 0 3pt;
+  }
+  #resume-print-root h1 {
+    margin: 0 0 2pt;
+  }
+  #resume-print-root .resume-print-contact {
+    font-size: 8.5pt;
+    color: #555555;
+    margin: 0;
+  }
+  #resume-print-root h2 {
+    margin: 9pt 0 4pt;
+    padding-bottom: 2pt;
+    font-weight: bold;
+  }
+  #resume-print-root .resume-print-job-title {
+    font-weight: bold;
+    font-size: 11pt;
+    margin: 7pt 0 1pt;
+  }
+  #resume-print-root .resume-print-job-meta {
+    font-weight: bold;
+    color: #1f1f1f;
+    margin: 0 0 3pt;
+  }
+  /* Tailwind's preflight sets list-style: none globally — restore real bullets here. */
+  #resume-print-root ul {
+    list-style: disc outside;
+    margin: 0 0 4pt 14pt;
+    padding: 0;
+  }
+  #resume-print-root li {
+    font-size: 9pt;
+    line-height: 1.25;
+    margin-bottom: 2pt;
+  }
+  #resume-print-root .resume-print-summary {
+    line-height: 1.35;
+  }
+  /* Tailored highlight section ("Selected Impact" / "Flagship Products" / ...): bold
+     accent title + short body, mirroring the docx renderers. Accent color comes from the
+     per-template blocks below. */
+  #resume-print-root .resume-print-highlight-title {
+    font-weight: bold;
+    font-size: 10pt;
+    margin: 5pt 0 1pt;
+  }
+  #resume-print-root .resume-print-highlight-body {
+    font-size: 9pt;
+    line-height: 1.3;
+    margin: 0 0 4pt;
+  }
+
+  /* Two-column layout (Template1/Template4 structure: 7200/3360 twip columns). */
+  #resume-print-root .resume-print-columns {
+    display: grid;
+    grid-template-columns: 68.2% 31.8%;
+    column-gap: 12pt;
+    margin-top: 8pt;
+  }
+  #resume-print-root .resume-print-side {
+    padding: 6pt 10pt 10pt;
+  }
+  #resume-print-root .resume-print-side h3 {
+    font-weight: bold;
+    text-transform: uppercase;
+    font-size: 9pt;
+    letter-spacing: 2pt;
+    margin: 8pt 0 3pt;
+    padding-bottom: 1.5pt;
+  }
+  #resume-print-root .resume-print-skill {
+    font-size: 8.5pt;
+    margin: 0 0 2pt;
+  }
+  #resume-print-root .resume-print-ed {
+    font-size: 8.5pt;
+    margin: 0 0 1pt;
+  }
+  #resume-print-root .resume-print-ed-meta {
+    font-size: 8.5pt;
+    color: #555555;
+    margin: 0 0 4pt;
+  }
+
+  /* Two-column overflow: everything past the page-1 split continues full width. */
+  #resume-print-root .resume-print-fullwidth {
+    margin-top: 4pt;
+  }
+
+  /* --- Layout: two-column (Arial, rule-under-contact header, tinted sidebar) --- */
+  #resume-print-root.tpl-two-column {
+    font-family: Arial, Helvetica, sans-serif;
+  }
+  #resume-print-root.tpl-two-column h1 {
+    font-size: 26pt;
+    color: var(--rp-accent);
+  }
+  #resume-print-root.tpl-two-column .resume-print-contact {
+    border-bottom: 1.5pt solid var(--rp-accent);
+    padding-bottom: 4pt;
+  }
+  #resume-print-root.tpl-two-column h2 {
+    font-size: 12pt;
+    color: var(--rp-accent);
+    letter-spacing: 2pt;
+    text-transform: uppercase;
+    border-bottom: 1pt solid var(--rp-accent);
+  }
+  #resume-print-root.tpl-two-column .resume-print-job-title,
+  #resume-print-root.tpl-two-column .resume-print-highlight-title {
+    color: var(--rp-accent);
+  }
+  #resume-print-root.tpl-two-column .resume-print-side {
+    background: var(--rp-fill);
+  }
+  #resume-print-root.tpl-two-column .resume-print-side h3 {
+    color: var(--rp-accent);
+    border-bottom: 1pt solid var(--rp-accent);
+  }
+
+  /* --- Layout: editorial (Georgia, tinted name band, thin section rules) --- */
+  #resume-print-root.tpl-editorial {
+    font-family: Georgia, 'Times New Roman', serif;
+  }
+  #resume-print-root.tpl-editorial .resume-print-header {
+    background: var(--rp-fill);
+    padding: 10pt 12pt;
+    margin-bottom: 8pt;
+  }
+  #resume-print-root.tpl-editorial h1 {
+    font-size: 30pt;
+    font-weight: normal;
+    color: var(--rp-accent);
+    letter-spacing: 1pt;
+  }
+  #resume-print-root.tpl-editorial h2 {
+    font-size: 13pt;
+    font-weight: normal;
+    color: var(--rp-accent);
+    border-bottom: 0.75pt solid var(--rp-accent);
+  }
+  #resume-print-root.tpl-editorial .resume-print-job-title,
+  #resume-print-root.tpl-editorial .resume-print-highlight-title {
+    color: var(--rp-accent);
+  }
+  #resume-print-root.tpl-editorial .resume-print-summary {
+    text-align: justify;
+  }
+}

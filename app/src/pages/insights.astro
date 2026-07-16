@@ -1,0 +1,12 @@
+---
+import AppShell from '../layouts/AppShell.astro';
+import InsightsView from '../components/InsightsView';
+---
+
+<AppShell
+  title="Insights"
+  active="insights"
+  description="Funnel, deaths-by-stage, rejection reasons, win-rates, and weekly pace, with the lessons log underneath as evidence."
+>
+  <InsightsView client:load />
+</AppShell>

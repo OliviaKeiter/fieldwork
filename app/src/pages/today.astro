@@ -1,0 +1,16 @@
+---
+import AppShell from '../layouts/AppShell.astro';
+import TodayQueue from '../components/TodayQueue';
+import SweepPanel from '../components/SweepPanel';
+---
+
+<AppShell
+  title="Today"
+  active="today"
+  description="What went out, what needs you today, what's on the calendar next."
+>
+  <div class="flex flex-col gap-8">
+    <TodayQueue client:load />
+    <SweepPanel client:load />
+  </div>
+</AppShell>

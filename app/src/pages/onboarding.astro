@@ -1,0 +1,14 @@
+---
+import AppShell from '../layouts/AppShell.astro';
+import OnboardingWizard from '../components/OnboardingWizard';
+import Breadcrumb from '../components/Breadcrumb.astro';
+---
+
+<AppShell
+  title="Onboarding"
+  active="onboarding"
+  description="The setup interview that fills in your career record, as screens."
+>
+  <Breadcrumb slot="breadcrumb" href="/settings" label="Settings" />
+  <OnboardingWizard client:load />
+</AppShell>
