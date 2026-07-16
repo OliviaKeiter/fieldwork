@@ -11,6 +11,11 @@ import netlify from '@astrojs/netlify';
 export default defineConfig({
   integrations: [react()],
 
+  // Honor an externally assigned port (e.g. a second dev server next to the default one).
+  server: {
+    port: process.env.PORT ? Number(process.env.PORT) : 4321,
+  },
+
   vite: {
     plugins: [tailwindcss()]
   },

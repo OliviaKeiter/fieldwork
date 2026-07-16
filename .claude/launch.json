@@ -5,7 +5,8 @@
       "name": "fieldwork",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "app"],
-      "port": 4321
+      "port": 4321,
+      "autoPort": true
     }
   ]
 }

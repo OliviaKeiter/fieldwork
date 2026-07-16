@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import { invokeFn } from './functions';
-import type { FwGrade, FwIntakeRun, FwIntakeRunItem } from './types';
+import { FW_GRADES } from './types';
+import type { FwGrade, FwIntakeRunItem } from './types';
 
 /** Shape returned by the `scorecard` edge function (and, per-candidate, by `daily_loop`). */
 export interface VerdictCard {
@@ -48,28 +49,54 @@ export async function runScorecard(input: {
   return invokeFn<VerdictCard>('scorecard', input);
 }
 
-/** The most recent intake run and the roles it looked at, newest first.
- *
- * This is what makes a bad run recoverable: the cards are read back from
- * fw_intake_run_items rather than re-scored, so a failed render costs nothing but a click.
- * Returns null when nothing has been logged yet. */
-export async function loadLastRun(): Promise<{ run: FwIntakeRun; items: FwIntakeRunItem[] } | null> {
-  const { data: runs, error: runErr } = await supabase
-    .from('fw_intake_runs')
-    .select('*')
-    .order('ran_at', { ascending: false })
-    .limit(1);
-  if (runErr) throw runErr;
-  const run = (runs ?? [])[0] as FwIntakeRun | undefined;
-  if (!run) return null;
+/** The key every dedupe in the system agrees on — mirrors daily_loop's case-insensitive
+ * company+title match against fw_applications. "Pending" below means exactly "daily_loop
+ * would not skip this as a duplicate". */
+export function pendingKey(company: string, title: string | null | undefined): string {
+  return `${company.trim().toLowerCase()}::${(title ?? '').trim().toLowerCase()}`;
+}
 
-  const { data: items, error: itemErr } = await supabase
-    .from('fw_intake_run_items')
-    .select('*')
-    .eq('run_id', run.id)
-    .order('created_at', { ascending: true });
-  if (itemErr) throw itemErr;
-  return { run, items: (items ?? []) as FwIntakeRunItem[] };
+/** Every graded card not yet filed or passed on — the persistent review queue.
+ *
+ * Both the scorecard and daily_loop functions log each graded card to
+ * fw_intake_run_items, and filing/discarding writes an fw_applications row (to_apply or
+ * passed). So "graded item with no matching application" is precisely "card the user has
+ * not dealt with yet", across page reloads, with no extra bookkeeping to get wrong.
+ * Deduped by company+title (a role re-scored in a later run shows once, newest grade),
+ * sorted best grade first. Capped at the 200 newest graded items — beyond that a card is
+ * stale enough that re-scoring it is more honest than reviewing it. */
+export async function loadPendingCards(): Promise<DailyLoopResult[]> {
+  const [itemsRes, appsRes] = await Promise.all([
+    supabase
+      .from('fw_intake_run_items')
+      .select('*')
+      .eq('outcome', 'graded')
+      .order('created_at', { ascending: false })
+      .limit(200),
+    supabase.from('fw_applications').select('company, title'),
+  ]);
+  if (itemsRes.error) throw itemsRes.error;
+  if (appsRes.error) throw appsRes.error;
+
+  const existing = new Set(
+    ((appsRes.data ?? []) as { company: string; title: string | null }[]).map((a) =>
+      pendingKey(a.company, a.title)
+    )
+  );
+  const seen = new Set<string>();
+  const pending: FwIntakeRunItem[] = [];
+  for (const item of (itemsRes.data ?? []) as FwIntakeRunItem[]) {
+    const key = pendingKey(item.company, item.title);
+    if (existing.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    pending.push(item);
+  }
+  // Stable sort: items arrive newest-first, so within a grade the newest card stays on top.
+  pending.sort(
+    (a, b) =>
+      FW_GRADES.indexOf(a.grade ?? 'F') - FW_GRADES.indexOf(b.grade ?? 'F')
+  );
+  return pending.map(itemToResult);
 }
 
 /** Re-shapes a stored item back into the same result row the edge function returns, so a

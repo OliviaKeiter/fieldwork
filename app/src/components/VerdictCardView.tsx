@@ -57,6 +57,7 @@ interface Props {
   onFile?: () => void;
   onDiscard?: () => void;
   filing?: boolean;
+  discarding?: boolean;
   filed?: boolean;
   discarded?: boolean;
 }
@@ -68,6 +69,7 @@ export default function VerdictCardView({
   onFile,
   onDiscard,
   filing,
+  discarding,
   filed,
   discarded,
 }: Props) {
@@ -90,17 +92,17 @@ export default function VerdictCardView({
               <button
                 type="button"
                 onClick={onDiscard}
-                disabled={filing}
+                disabled={filing || discarding}
                 className="rounded-lg border border-border px-3 py-1.5 text-xs text-text-dim transition-colors hover:text-text disabled:opacity-50"
               >
-                Discard
+                {discarding ? 'Discarding…' : 'Discard'}
               </button>
             )}
             {onFile && (
               <button
                 type="button"
                 onClick={onFile}
-                disabled={filing}
+                disabled={filing || discarding}
                 className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50"
               >
                 {filing ? 'Filing…' : 'File as to_apply'}

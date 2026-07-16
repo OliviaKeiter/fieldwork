@@ -8,11 +8,15 @@ import JdLibrary from '../components/JdLibrary';
 <AppShell
   title="Intake"
   active="intake"
-  description="Paste a JD or a URL, get a scorecard verdict, file it. Or run a batch of candidates through the daily loop for review."
+  description="Run the daily loop to find and grade new roles, or score a single JD by hand. Graded cards wait below until you file or discard them."
 >
   <div class="flex flex-col gap-8">
-    <IntakeScreen client:load />
     <DailyLoopPanel client:load />
+
+    <section>
+      <h2 class="mb-3 text-base font-semibold text-text">Score a single JD</h2>
+      <IntakeScreen client:load />
+    </section>
 
     <section>
       <h2 class="mb-3 text-base font-semibold text-text">JD library</h2>
