@@ -104,6 +104,8 @@ npm run dev
 
 The app runs at `http://localhost:4321`.
 
+Or use the launcher in the repo root: double-click `launch.cmd` on Windows, or run `./launch.sh` on macOS/Linux. First run installs dependencies and creates `app/.env` for you to fill in; after that it starts the server and opens the app.
+
 Or deploy to Netlify. The fastest way is the **Deploy to Netlify** button at the top of this README: it clones this repo to your GitHub account, prompts you for `PUBLIC_SUPABASE_URL` and `PUBLIC_SUPABASE_ANON_KEY`, and deploys (the committed root [`netlify.toml`](netlify.toml) sets the base directory and build for you). The button only deploys the app itself — steps 1 through 4 (schema, auth, edge functions, secrets) are still yours to do, and can happen before or after.
 
 To wire it up by hand instead: create a Netlify site from your fork, set the base directory to `app`, and add the same two environment variables. The committed [`app/netlify.toml`](app/netlify.toml) declares the build command and publish directory (both relative to that base), so leave those fields alone.
