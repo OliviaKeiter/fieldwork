@@ -1,6 +1,6 @@
 # Fieldwork
 
-Fieldwork is a self-hosted, single-user job-search cockpit. It replaces the spreadsheet, the sticky notes, and the "did I ever follow up with them?" anxiety with one app: a pipeline kanban, a daily action queue computed from your own timing rules, an AI scorecard and intake flow with optional web sourcing, a resume studio with four templates and docx/PDF export, interview prep docs, outreach drafts, an insights view built from your lessons-learned log, and a full data export so your data can always walk out the door. Built on Astro + React + Tailwind + Supabase + Claude.
+Fieldwork is a self-hosted, single-user job-search cockpit. It replaces the spreadsheet, the sticky notes, and the "did I ever follow up with them?" anxiety with one app: a pipeline kanban, a daily action queue computed from your own timing rules, an AI scorecard and intake flow with optional web sourcing, a resume studio (two layouts, six color themes, docx/PDF export), interview prep docs, outreach drafts, an insights view built from your lessons-learned log, and a full data export so your data can always walk out the door. Built on Astro + React + Tailwind + Supabase + Claude.
 
 ## Features
 
@@ -8,10 +8,10 @@ Fieldwork is a self-hosted, single-user job-search cockpit. It replaces the spre
 - **Pipeline board**: kanban by status (to_apply through offer/rejected/ghosted), drag to move, aging badges. Dragging to Rejected asks for the stated reason and logs a lessons row automatically.
 - **Intake + scorecard**: paste a JD (or URL). An edge function checks liveness, extracts comp/location/requirements, and returns a verdict card scored against your career record.
 - **Daily loop**: optional web sourcing (via Tavily) finds new roles matching your target titles, dedupes against your pipeline, and scorecards each one.
-- **Resume studio**: four templates, ATS keyword pass, in-browser .docx and PDF export. Every line is bounded by your career record; the AI can rephrase it but never exceed it.
+- **Resume studio**: two layouts in six color themes, certifications and clearance, ATS keyword pass, in-browser .docx and PDF export. Every line is bounded by your career record; the AI can rephrase it but never exceed it, and every exported version is kept.
 - **Interview prep**: per-round prep docs generated from the stored JD, your record, and your lessons log. Debrief forms feed thank-you drafts.
 - **Outreach drafts**: hello / nudge / thank-you / stay-in-touch / cover letter. Drafts only. The app never sends anything; you get Copy and Mark Sent buttons.
-- **Insights**: funnel chart, deaths-by-stage, clustered rejection reasons, title win-rates, weekly velocity.
+- **Insights**: KPI tiles, funnel, stage conversion, effectiveness by source/title/grade, deaths-by-stage, clustered rejection reasons, title win-rates, and weekly velocity — with panels you can reorder or hide.
 - **Data export**: csv/markdown export of everything.
 
 ## Screenshots
@@ -38,7 +38,7 @@ You need: an Anthropic API key, Node 22.12 or newer (Astro 7 requires it; `npm i
 
 ### 1. Create a Supabase project and run the schema
 
-Create a new Supabase project, open the SQL editor, and run the contents of [`supabase/schema.sql`](supabase/schema.sql). This creates the 11 `fw_` tables, 7 enums, RLS policies, and default settings.
+Create a new Supabase project, open the SQL editor, and run the contents of [`supabase/schema.sql`](supabase/schema.sql). This creates the 12 `fw_` tables, 7 enums, the owner-scoped row-level security policies, and default settings.
 
 ### 2. Enable email auth and allow your redirect URLs
 
@@ -138,7 +138,7 @@ supabase start     # boots Postgres, Auth, Studio, and the edge runtime in Docke
 
 ### 2. Create the schema
 
-Open the local Studio URL, go to the SQL editor, and run the contents of [`supabase/schema.sql`](supabase/schema.sql) — same file as the hosted path. (Or from a shell: `psql "$(supabase status -o env | grep DB_URL | cut -d= -f2)" -f supabase/schema.sql`.)
+Open the local Studio URL, go to the SQL editor, and run the contents of [`supabase/schema.sql`](supabase/schema.sql) — same file as the hosted path. (Or, if you have `psql`, the local database URL is always `postgresql://postgres:postgres@127.0.0.1:54322/postgres`, so: `psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -f supabase/schema.sql`.)
 
 ### 3. Give the edge functions their secrets and serve them
 
@@ -165,7 +165,7 @@ npm run dev
 
 ### 5. Sign in — the magic link stays local too
 
-Local Supabase does not send real email; it captures it. Request a magic link in the app, then open the local mailbox (**Inbucket**) at `http://127.0.0.1:54324`, find the message, and click the link. The first account you sign in with claims ownership of the project (see [Security](#security)).
+Local Supabase does not send real email; it captures it in a local inbox. Request a magic link in the app, then open that inbox in your browser — its URL is printed in the `supabase start` output (usually `http://127.0.0.1:54324`) — find the message, and click the link. The first account you sign in with claims ownership of the project (see [Security](#security)).
 
 To stop everything later: `supabase stop`. Your data persists in Docker between runs.
 
