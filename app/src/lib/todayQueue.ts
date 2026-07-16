@@ -1,3 +1,4 @@
+import { FW_GRADES } from './types';
 import type { FwApplication, FwEvent } from './types';
 import type { TimingSettings } from './settings';
 import { calendarDaysUntil, daysBetween, hoursBetween, parseDate } from './dateUtils';
@@ -33,6 +34,10 @@ export interface TodayView {
   appliedToday: FwApplication[];
   dueToday: QueueItem[];
   dueTomorrow: QueueItem[];
+  /** Every application still sitting at to_apply — the standing work pile, best grade
+   * first. Complete on purpose: the stale ones also get a dueToday nag, but "what could I
+   * apply to right now" should be answerable from this page without opening Pipeline. */
+  toApply: FwApplication[];
   /** Booked interviews from now forward, soonest first. */
   upcoming: UpcomingInterview[];
   /** Active applications past the silence threshold. The caller sweeps these to 'ghosted'
@@ -112,6 +117,7 @@ export function buildTodayView(
   const appliedToday: FwApplication[] = [];
   const dueToday: QueueItem[] = [];
   const dueTomorrow: QueueItem[] = [];
+  const toApply: FwApplication[] = [];
   const upcoming: UpcomingInterview[] = [];
   const ghostCandidates: FwApplication[] = [];
 
@@ -135,6 +141,10 @@ export function buildTodayView(
 
     if (TERMINAL_STATUSES.has(app.status)) continue;
     live++;
+
+    // Collected before the due-item checks below — those `continue` on a match, and the
+    // work pile must stay complete either way.
+    if (app.status === 'to_apply') toApply.push(app);
 
     // --- Upcoming interviews -----------------------------------------------------------
     const booked = appEvents.filter(
@@ -229,10 +239,19 @@ export function buildTodayView(
       new Date(b.event.scheduled_at as string).getTime()
   );
 
+  // Best grade first; within a grade, oldest first so the pile drains FIFO.
+  toApply.sort((a, b) => {
+    const byGrade =
+      FW_GRADES.indexOf(a.grade ?? 'F') - FW_GRADES.indexOf(b.grade ?? 'F');
+    if (byGrade !== 0) return byGrade;
+    return parseDate(a.created_at).getTime() - parseDate(b.created_at).getTime();
+  });
+
   return {
     appliedToday,
     dueToday,
     dueTomorrow,
+    toApply,
     upcoming,
     ghostCandidates,
     momentum: { appliedToday: appliedToday.length, appliedThisWeek, live, repliesThisWeek },

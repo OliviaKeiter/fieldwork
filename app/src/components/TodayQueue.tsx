@@ -8,8 +8,9 @@ import {
   type UpcomingInterview,
 } from '../lib/todayQueue';
 import { autoGhost, snoozeNextAction } from '../lib/applications';
-import { formatTime } from '../lib/dateUtils';
+import { daysBetween, formatTime, parseDate } from '../lib/dateUtils';
 import DraftPanel from './DraftPanel';
+import { GradeBadge } from './VerdictCardView';
 import {
   IconMail,
   IconBell,
@@ -152,7 +153,7 @@ export default function TodayQueue() {
     );
   }
 
-  const { momentum, appliedToday, dueToday, dueTomorrow, upcoming } = view;
+  const { momentum, appliedToday, dueToday, dueTomorrow, toApply, upcoming } = view;
   const upcomingToday = upcoming.filter((u) => u.daysOut === 0);
   const upcomingTomorrow = upcoming.filter((u) => u.daysOut === 1);
   const upcomingAhead = upcoming.filter((u) => u.daysOut > 1);
@@ -188,6 +189,8 @@ export default function TodayQueue() {
           } />
         )}
       </Section>
+
+      {toApply.length > 0 && <ToApplySection apps={toApply} />}
 
       <Section title="Tomorrow" count={dueTomorrow.length + upcomingTomorrow.length} dim>
         {upcomingTomorrow.map((u) => (
@@ -300,6 +303,42 @@ function Section({
       </h2>
       <div className="flex flex-col gap-3">{children}</div>
     </div>
+  );
+}
+
+/** The standing work pile: every application still at to_apply, best grade first. Not a
+ * due list — nothing here has a deadline — but "what could I apply to right now" belongs
+ * on Today, not a tab away in Pipeline. */
+function ToApplySection({ apps }: { apps: FwApplication[] }) {
+  const now = new Date();
+  return (
+    <Section title="To apply" count={apps.length}>
+      {apps.map((a) => {
+        const queuedDays = Math.floor(daysBetween(now, parseDate(a.created_at)));
+        return (
+          <div
+            key={a.id}
+            className="flex items-start justify-between gap-4 rounded-xl border border-border bg-surface p-4"
+          >
+            <div className="flex min-w-0 gap-3">
+              {a.grade ? (
+                <GradeBadge grade={a.grade} small />
+              ) : (
+                <IconChip Icon={IconClock} />
+              )}
+              <div className="min-w-0">
+                <p className="font-medium text-text">{a.company}</p>
+                <p className="mt-0.5 text-sm text-text-dim">
+                  {a.title ?? 'Role'} · queued{' '}
+                  {queuedDays === 0 ? 'today' : `${queuedDays}d ago`}
+                </p>
+                <DossierLink id={a.id} />
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </Section>
   );
 }
 
