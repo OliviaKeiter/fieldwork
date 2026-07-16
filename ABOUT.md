@@ -15,7 +15,7 @@ A few decisions shape everything else:
 
 ## What's in it
 
-A pipeline kanban, a daily action queue built from your own timing rules, an AI scorecard and intake flow with optional web sourcing, a resume studio with four templates and in-browser docx/PDF export, per-round interview prep, outreach drafts, and an insights view built from your own lessons-learned log.
+A pipeline kanban, a daily action queue built from your own timing rules, an AI scorecard and intake flow with optional web sourcing, a resume studio with two layouts in six color themes and in-browser docx/PDF export, per-round interview prep, outreach drafts, and an insights view built from your own lessons-learned log.
 
 ## How it's built
 
