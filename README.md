@@ -1,5 +1,7 @@
 # Fieldwork
 
+[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/OliviaKeiter/fieldwork)
+
 Fieldwork is a self-hosted, single-user job-search cockpit. It replaces the spreadsheet, the sticky notes, and the "did I ever follow up with them?" anxiety with one app: a pipeline kanban, a daily action queue computed from your own timing rules, an AI scorecard and intake flow with optional web sourcing, a resume studio (two layouts, six color themes, docx/PDF export), interview prep docs, outreach drafts, an insights view built from your lessons-learned log, and a full data export so your data can always walk out the door. Built on Astro + React + Tailwind + Supabase + Claude.
 
 ## Features
@@ -102,7 +104,11 @@ npm run dev
 
 The app runs at `http://localhost:4321`.
 
-Or deploy to Netlify: set the base directory to `app` and add `PUBLIC_SUPABASE_URL` and `PUBLIC_SUPABASE_ANON_KEY` as environment variables. The committed [`app/netlify.toml`](app/netlify.toml) already declares the build command and publish directory (both relative to that base), so leave those fields alone. Then add your deployed URL to the redirect allow-list from step 2.
+Or deploy to Netlify. The fastest way is the **Deploy to Netlify** button at the top of this README: it clones this repo to your GitHub account, prompts you for `PUBLIC_SUPABASE_URL` and `PUBLIC_SUPABASE_ANON_KEY`, and deploys (the committed root [`netlify.toml`](netlify.toml) sets the base directory and build for you). The button only deploys the app itself — steps 1 through 4 (schema, auth, edge functions, secrets) are still yours to do, and can happen before or after.
+
+To wire it up by hand instead: create a Netlify site from your fork, set the base directory to `app`, and add the same two environment variables. The committed [`app/netlify.toml`](app/netlify.toml) declares the build command and publish directory (both relative to that base), so leave those fields alone.
+
+Either way, finish by adding your deployed URL to the redirect allow-list from step 2, or your magic links will land on a dead page.
 
 ### 7. First sign-in
 
