@@ -233,6 +233,42 @@ export function looksLikeJd(text: string | null | undefined): boolean {
   return JD_SIGNALS.some((s) => t.includes(s));
 }
 
+/** Workday postings serve a JS shell to plain fetches — stripHtml yields nothing, Tavily's
+ * extractor usually fails too. But every myworkdayjobs.com posting URL maps onto the site's
+ * own JSON endpoint (/wday/cxs/<tenant>/<site>/job/<path>), which returns
+ * jobPostingInfo.jobDescription as HTML at plain HTTP 200 with no rendering and no
+ * bot-wall. Shared verbatim with daily_loop. */
+export async function fetchWorkdayJd(url: string): Promise<string | null> {
+  try {
+    const parsed = new URL(url);
+    if (!/(^|\.)myworkdayjobs\.com$/i.test(parsed.hostname)) return null;
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const jobIdx = segments.indexOf("job");
+    if (jobIdx < 1 || jobIdx === segments.length - 1) return null;
+    const tenant = parsed.hostname.split(".")[0];
+    const site = segments[jobIdx - 1];
+    const candidates = [
+      // Full remaining path first; some tenants include a location segment before the slug.
+      `${parsed.origin}/wday/cxs/${tenant}/${site}/${segments.slice(jobIdx).join("/")}`,
+      `${parsed.origin}/wday/cxs/${tenant}/${site}/job/${segments[segments.length - 1]}`,
+    ];
+    for (const apiUrl of candidates) {
+      const res = await fetch(apiUrl, { headers: { accept: "application/json" } });
+      if (!res.ok) continue;
+      const payload = await res.json().catch(() => null) as {
+        jobPostingInfo?: { title?: string; location?: string; locationsText?: string; jobDescription?: string };
+      } | null;
+      const info = payload?.jobPostingInfo;
+      if (typeof info?.jobDescription !== "string" || !info.jobDescription.trim()) continue;
+      const headline = [info.title, info.locationsText ?? info.location].filter(Boolean).join(" — ");
+      return stripHtml(`${headline ? `${headline}. ` : ""}${info.jobDescription}`).slice(0, 15000);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 const VERDICT_TOOL = {
   name: "emit_verdict",
   description: "Emit the structured scorecard verdict for this job description.",
@@ -280,6 +316,30 @@ const VERDICT_TOOL = {
  * import — edge functions deploy as independent bundles) with daily_loop's inline scoring
  * loop, so keep the two in sync if this changes. */
 export async function scoreJd(opts: {
+  jdText: string;
+  livenessNote: string | null;
+  profile: Record<string, unknown>;
+  model: string;
+  apiKey: string;
+}): Promise<VerdictResult> {
+  // The model occasionally answers a forced tool_choice with an empty or near-empty input
+  // ({} or just a grade). Before this guard those came out as fully-defaulted cards — a
+  // bare "C" with no reasoning, no comp, no gaps — indistinguishable from a real verdict.
+  // An unexplained grade is worse than no grade, so: retry once, then give up loudly.
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const verdict = await scoreJdOnce(opts);
+      if (verdict.reasoning.trim()) return verdict;
+      lastErr = new Error("Model returned an empty verdict (grade with no reasoning) — not scored.");
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+  throw lastErr ?? new Error("Scoring failed.");
+}
+
+async function scoreJdOnce(opts: {
   jdText: string;
   livenessNote: string | null;
   profile: Record<string, unknown>;
@@ -337,7 +397,9 @@ List concrete gaps as short strings. Write one pain_line naming the real pain be
     },
     body: JSON.stringify({
       model,
-      max_tokens: 1500,
+      // 1500 used to truncate long verdicts mid-emission, leaving grade-only cards with
+      // empty reasoning. Headroom plus the stop_reason check below prevents that.
+      max_tokens: 3000,
       system: systemPrompt,
       messages: [{ role: "user", content: userMessage }],
       tools: [VERDICT_TOOL],
@@ -351,6 +413,9 @@ List concrete gaps as short strings. Write one pain_line naming the real pain be
   }
 
   const payload = await res.json();
+  if (payload.stop_reason === "max_tokens") {
+    throw new Error("Verdict ran out of tokens mid-emission — not scored. Re-run this candidate.");
+  }
   const toolUse = (payload.content ?? []).find((b: { type: string }) => b.type === "tool_use");
   if (!toolUse) {
     throw new Error("Claude did not return a structured verdict.");
@@ -512,6 +577,13 @@ Deno.serve(async (req: Request) => {
       if (!effectiveJdText && liveness.pageText) {
         effectiveJdText = liveness.pageText;
       }
+    }
+
+    // Workday-specific rescue before spending a Tavily credit: the CXS JSON endpoint
+    // serves the real JD where both the plain fetch and Tavily's extractor get a shell.
+    if (!jd_text && url && !looksLikeJd(effectiveJdText)) {
+      const wd = await fetchWorkdayJd(url);
+      if (wd && (looksLikeJd(wd) || !effectiveJdText)) effectiveJdText = wd;
     }
 
     // URL-derived text only — pasted JD text is trusted as-is. If the direct fetch got a

@@ -12,9 +12,13 @@
 //      (Indeed/LinkedIn/Ladders serve checkpoints or shells to server-side fetches), and
 //      fetched text must pass a looksLikeJd gate — with a Tavily Extract second chance —
 //      before it's scored, so walls surface as error rows instead of junk F/D cards.
-// Both modes dedupe against fw_applications (case-insensitive company+title match) and for
-// every non-duplicate run the same inline scorecard logic as the `scorecard` function
-// (liveness check if a url is known, then a Claude verdict call).
+// Both modes dedupe against fw_applications (company-variant+title keys, see matchKeys,
+// plus canonical posting URL against fw_jds) and for every non-duplicate run the same
+// inline scorecard logic as the `scorecard` function (liveness check if a url is known,
+// then a Claude verdict call). Sourcing mode additionally filters search hits whose URL is
+// already known (filed, or graded within the last 14 days and still pending review) BEFORE
+// the triage call, so candidate slots go to genuinely new roles instead of re-discovering
+// the same postings run after run.
 //
 // IMPORTANT — this function does NOT write to fw_applications / fw_jds. SPEC.md §5 says
 // daily-loop results should "stack up for review", and the Intake screen spec (§9 gate,
@@ -206,6 +210,44 @@ async function checkLiveness(url: string): Promise<LivenessResult> {
   }
 }
 
+/** Workday postings serve a JS shell to plain fetches — stripHtml yields nothing, Tavily's
+ * extractor usually fails too, and the candidate dies as an error row. But every
+ * myworkdayjobs.com posting URL maps onto the site's own JSON endpoint
+ * (/wday/cxs/<tenant>/<site>/job/<path>), which returns jobPostingInfo.jobDescription as
+ * HTML at plain HTTP 200 with no rendering and no bot-wall. Sourcing steers toward Workday
+ * (it's in ATS_HOSTS), so this is the difference between scoring those roles and losing
+ * every one of them. */
+async function fetchWorkdayJd(url: string): Promise<string | null> {
+  try {
+    const parsed = new URL(url);
+    if (!/(^|\.)myworkdayjobs\.com$/i.test(parsed.hostname)) return null;
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const jobIdx = segments.indexOf("job");
+    if (jobIdx < 1 || jobIdx === segments.length - 1) return null;
+    const tenant = parsed.hostname.split(".")[0];
+    const site = segments[jobIdx - 1];
+    const candidates = [
+      // Full remaining path first; some tenants include a location segment before the slug.
+      `${parsed.origin}/wday/cxs/${tenant}/${site}/${segments.slice(jobIdx).join("/")}`,
+      `${parsed.origin}/wday/cxs/${tenant}/${site}/job/${segments[segments.length - 1]}`,
+    ];
+    for (const apiUrl of candidates) {
+      const res = await fetch(apiUrl, { headers: { accept: "application/json" } });
+      if (!res.ok) continue;
+      const payload = await res.json().catch(() => null) as {
+        jobPostingInfo?: { title?: string; location?: string; locationsText?: string; jobDescription?: string };
+      } | null;
+      const info = payload?.jobPostingInfo;
+      if (typeof info?.jobDescription !== "string" || !info.jobDescription.trim()) continue;
+      const headline = [info.title, info.locationsText ?? info.location].filter(Boolean).join(" — ");
+      return stripHtml(`${headline ? `${headline}. ` : ""}${info.jobDescription}`).slice(0, 15000);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 const VERDICT_TOOL = {
   name: "emit_verdict",
   description: "Emit the structured scorecard verdict for this job description.",
@@ -240,7 +282,32 @@ const VERDICT_TOOL = {
   },
 };
 
+/** The model occasionally answers a forced tool_choice with an empty or near-empty input
+ * ({} or just a grade). Before this guard those came out as fully-defaulted cards — a bare
+ * "C" with no reasoning, no comp, no gaps — indistinguishable from a real verdict in the
+ * review queue. An unexplained grade is worse than no grade, so: retry once, then give up
+ * loudly (the caller turns the throw into an error row). */
 async function scoreJd(opts: {
+  jdText: string;
+  livenessNote: string | null;
+  profile: Record<string, unknown>;
+  model: string;
+  apiKey: string;
+}): Promise<VerdictResult> {
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const verdict = await scoreJdOnce(opts);
+      if (verdict.reasoning.trim()) return verdict;
+      lastErr = new Error("Model returned an empty verdict (grade with no reasoning) — not scored.");
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+  throw lastErr ?? new Error("Scoring failed.");
+}
+
+async function scoreJdOnce(opts: {
   jdText: string;
   livenessNote: string | null;
   profile: Record<string, unknown>;
@@ -296,7 +363,11 @@ List concrete gaps as short strings. Write one pain_line naming the real pain be
     },
     body: JSON.stringify({
       model,
-      max_tokens: 1500,
+      // 1500 used to truncate long verdicts mid-emission: the tool input arrived with the
+      // early fields (grade first) but empty gaps/reasoning, and the defective card sailed
+      // into the review queue as an unexplained grade. Headroom plus the stop_reason check
+      // below turns that failure mode into an honest error row.
+      max_tokens: 3000,
       system: systemPrompt,
       messages: [{ role: "user", content: userMessage }],
       tools: [VERDICT_TOOL],
@@ -310,6 +381,9 @@ List concrete gaps as short strings. Write one pain_line naming the real pain be
   }
 
   const payload = await res.json();
+  if (payload.stop_reason === "max_tokens") {
+    throw new Error("Verdict ran out of tokens mid-emission — not scored. Re-run this candidate.");
+  }
   const toolUse = (payload.content ?? []).find((b: { type: string }) => b.type === "tool_use");
   if (!toolUse) {
     throw new Error("Claude did not return a structured verdict.");
@@ -693,13 +767,35 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const [{ data: profile }, { data: settingsRows }, { data: existingApps }, { data: existingJds }] =
+    const [{ data: profile }, { data: settingsRows }, { data: existingApps }, { data: existingJds }, { data: recentItems }] =
       await Promise.all([
         supabase.from("fw_profile").select("*").limit(1).maybeSingle(),
         supabase.from("fw_settings").select("key, value"),
         supabase.from("fw_applications").select("company, title"),
         supabase.from("fw_jds").select("url"),
+        // Graded-and-still-pending cards from recent runs: their URLs shouldn't consume
+        // sourcing slots again while the user hasn't dealt with the existing card yet.
+        supabase
+          .from("fw_intake_run_items")
+          .select("url")
+          .eq("outcome", "graded")
+          .gte("created_at", new Date(Date.now() - 14 * 86400000).toISOString()),
       ]);
+
+    const existingKeys = new Set<string>();
+    for (const a of (existingApps ?? []) as { company: string; title: string | null }[]) {
+      for (const k of matchKeys(a.company, a.title)) existingKeys.add(k);
+    }
+    const existingUrls = new Set<string>();
+    for (const j of (existingJds ?? []) as { url: string | null }[]) {
+      const u = normalizeJobUrl(j.url);
+      if (u) existingUrls.add(u);
+    }
+    const recentGradedUrls = new Set<string>();
+    for (const item of (recentItems ?? []) as { url: string | null }[]) {
+      const u = normalizeJobUrl(item.url);
+      if (u) recentGradedUrls.add(u);
+    }
 
     const settings: Record<string, unknown> = {};
     for (const row of (settingsRows ?? []) as { key: string; value: unknown }[]) {
@@ -762,7 +858,16 @@ Deno.serve(async (req: Request) => {
           merged.push(r);
         }
       }
-      if (merged.length === 0) {
+      // Drop hits whose URL is already in the pipeline (fw_jds) or already graded and
+      // pending review, BEFORE triage. Without this, known roles eat candidate slots —
+      // one weekend run spent 6 of 15 slots re-discovering roles the user had already
+      // seen — and the fresh tail of the search results never gets triaged at all.
+      const fresh = merged.filter((r) => {
+        const u = normalizeJobUrl(r.url);
+        return u === null || (!existingUrls.has(u) && !recentGradedUrls.has(u));
+      });
+
+      if (fresh.length === 0) {
         await logRun(supabase, {
           kind: "daily_loop_source",
           requested: wanted,
@@ -776,22 +881,12 @@ Deno.serve(async (req: Request) => {
       }
 
       candidates = await extractCandidates({
-        results: merged,
+        results: fresh,
         profile: (profile ?? {}) as Record<string, unknown>,
         model,
         apiKey,
         count: wanted,
       });
-    }
-
-    const existingKeys = new Set<string>();
-    for (const a of (existingApps ?? []) as { company: string; title: string | null }[]) {
-      for (const k of matchKeys(a.company, a.title)) existingKeys.add(k);
-    }
-    const existingUrls = new Set<string>();
-    for (const j of (existingJds ?? []) as { url: string | null }[]) {
-      const u = normalizeJobUrl(j.url);
-      if (u) existingUrls.add(u);
     }
 
     const results = await Promise.all(
@@ -844,6 +939,13 @@ Deno.serve(async (req: Request) => {
           }
         }
 
+        // Workday-specific rescue before spending a Tavily credit: the CXS JSON endpoint
+        // serves the real JD where both the plain fetch and Tavily's extractor get a shell.
+        if (!userSuppliedJd && !looksLikeJd(effectiveJdText) && c.url) {
+          const wd = await fetchWorkdayJd(c.url);
+          if (wd && (looksLikeJd(wd) || !effectiveJdText)) effectiveJdText = wd;
+        }
+
         // Second-chance fetch: a plain edge-runtime fetch gets bot-walled by many career
         // sites; Tavily's extractor renders JS and usually gets through. One credit is
         // cheaper than a junk card.
@@ -861,6 +963,8 @@ Deno.serve(async (req: Request) => {
             title: c.title ?? null,
             url: c.url ?? null,
             duplicate: false,
+            live_checked_at: liveCheckedAt,
+            liveness_note: livenessNote,
             error: "No JD text on file or fetchable from the URL — provide jd_text for this candidate.",
           };
         }
