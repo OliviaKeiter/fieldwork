@@ -128,7 +128,7 @@ export async function snoozeNextAction(app: FwApplication, days: number): Promis
 
 export async function recordRejection(
   app: FwApplication,
-  statedReason: string
+  statedReason: string | null
 ): Promise<void> {
   await setStatus(app.id, 'rejected', app.status, 'Logged.');
 

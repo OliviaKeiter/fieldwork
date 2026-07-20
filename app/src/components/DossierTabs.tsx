@@ -3,6 +3,7 @@ import { IconChevronDown, IconEdit } from './icons';
 import {
   getApplication,
   insertEvent,
+  recordRejection,
   setStatus,
   updateApplicationDetails,
 } from '../lib/applications';
@@ -70,9 +71,9 @@ const EVENT_TYPES: FwEventType[] = [
 
 /** Event types that imply a pipeline stage: logging one auto-moves the application there,
  * FORWARD only (per fw_status enum order — a late-logged screen never downgrades a card
- * that's already interviewing). 'rejection' is deliberately absent: the Pipeline rejection
- * flow captures a stated reason for the lessons log, and a lessons-less rejected status
- * would defeat it. */
+ * that's already interviewing). 'rejection' is absent because it takes its own path in
+ * handleLogEvent: recordRejection(), so the lessons log still gets a row (the event note
+ * doubles as the company's stated reason). */
 const EVENT_STATUS_TARGET: Partial<Record<FwEventType, FwStatus>> = {
   applied: 'applied',
   screen: 'phone_screen',
@@ -244,6 +245,11 @@ export default function DossierTabs({ applicationId }: Props) {
         STATUS_ORDER.indexOf(target) > STATUS_ORDER.indexOf(application.status)
       ) {
         await setStatus(applicationId, target, application.status);
+      }
+      // Rejection moves the card too — same write shape as the Pipeline drag-to-reject
+      // (status + status_change event + fw_lessons row), with the note as the stated reason.
+      if (logType === 'rejection' && application && application.status !== 'rejected') {
+        await recordRejection(application, logBody.trim() || null);
       }
       if (logType === 'rejection') setRejectionHint(true);
 
@@ -465,11 +471,8 @@ export default function DossierTabs({ applicationId }: Props) {
             {logError && <p className="w-full text-sm text-danger">{logError}</p>}
             {rejectionHint && (
               <p className="w-full text-xs text-text-dim">
-                Rejection logged. Drag the card to Rejected in the{' '}
-                <a href="/pipeline" className="text-accent hover:underline">
-                  Pipeline
-                </a>{' '}
-                to record the stated reason for the lessons log.
+                Rejection logged — the card moved to Rejected and a lessons-log entry was
+                added (the note is stored as the company's stated reason).
               </p>
             )}
           </form>

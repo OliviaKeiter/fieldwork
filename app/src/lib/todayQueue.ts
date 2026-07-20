@@ -47,6 +47,10 @@ export interface TodayView {
 }
 
 const TERMINAL_STATUSES = new Set(['rejected', 'withdrawn', 'accepted', 'ghosted', 'passed']);
+/** Statuses where a nudge makes sense: a human has already engaged (screen or later), so
+ * there is someone to follow up with. Merely-applied roles are excluded on purpose — before
+ * a reply there is usually no contact to nudge, and pre-reply nudges were noise. */
+const NUDGEABLE_STATUSES = new Set(['phone_screen', 'interviewing', 'final_round', 'offer']);
 const ACTIVE_INTERVIEW_STATUSES = new Set([
   'applied',
   'phone_screen',
@@ -219,7 +223,7 @@ export function buildTodayView(
     }
 
     // --- Nudge — the stored next_action_due has arrived (or arrives tomorrow) ------------
-    if (app.next_action_due) {
+    if (app.next_action_due && NUDGEABLE_STATUSES.has(app.status)) {
       const due = parseDate(app.next_action_due);
       const daysUntilDue = calendarDaysUntil(due, now);
       const item: QueueItem = {
