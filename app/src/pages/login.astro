@@ -1,6 +1,7 @@
 ---
 import '../styles/global.css';
 import LoginForm from '../components/LoginForm';
+import LoginSky from '../components/LoginSky';
 ---
 
 <!doctype html>
@@ -22,7 +23,8 @@ import LoginForm from '../components/LoginForm';
     </script>
   </head>
   <body class="flex min-h-screen items-center justify-center bg-bg text-text">
-    <div class="w-full max-w-sm px-6">
+    <LoginSky client:load />
+    <div class="relative z-10 w-full max-w-sm px-6">
       <div class="mb-8 flex flex-col items-center text-center">
         <span
           aria-hidden="true"

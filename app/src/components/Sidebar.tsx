@@ -5,6 +5,8 @@ import {
   IconIntake,
   IconContacts,
   IconInsights,
+  IconConstellation,
+  IconSearch,
   IconSettings,
   IconPanel,
   type IconComponent,
@@ -17,6 +19,7 @@ export type NavKey =
   | 'intake'
   | 'contacts'
   | 'insights'
+  | 'constellation'
   | 'settings'
   | 'company'
   | 'onboarding';
@@ -49,6 +52,7 @@ const GROUPS: { title: string; items: NavItem[] }[] = [
     items: [
       { key: 'contacts', label: 'Contacts', href: '/contacts', Icon: IconContacts, hint: 'People' },
       { key: 'insights', label: 'Insights', href: '/insights', Icon: IconInsights, hint: 'What is working' },
+      { key: 'constellation', label: 'Constellation', href: '/constellation', Icon: IconConstellation, hint: 'Your search as a sky' },
     ],
   },
 ];
@@ -165,6 +169,28 @@ export default function Sidebar({ active }: { active: NavKey }) {
       </div>
 
       <nav className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 py-3">
+        {/* Opens the command palette (CommandPalette.tsx, a sibling island in
+            AppShell) via a window event — the only channel two islands share. */}
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new CustomEvent('fieldwork:palette'))}
+          className="fw-nav-link group relative flex items-center gap-3 rounded-lg border border-border bg-surface-2/50 px-3 py-2 text-text-dim transition-colors hover:bg-surface-2 hover:text-text"
+        >
+          <IconSearch className="h-5 w-5 shrink-0" />
+          <span className="fw-collapsible min-w-0 flex-1 truncate text-left text-sm">
+            Jump anywhere…
+          </span>
+          <kbd className="fw-collapsible rounded border border-border bg-bg px-1.5 py-0.5 font-sans text-[0.65rem] text-text-dim">
+            Ctrl K
+          </kbd>
+          <span
+            role="tooltip"
+            className="fw-tooltip pointer-events-none absolute left-full top-1/2 z-50 ml-2 -translate-y-1/2 whitespace-nowrap rounded-md border border-border bg-surface-2 px-2 py-1 text-xs font-medium text-text opacity-0 shadow-lg transition-opacity"
+          >
+            Jump anywhere · Ctrl K
+          </span>
+        </button>
+
         {GROUPS.map((group) => (
           <div key={group.title} className="flex flex-col gap-1">
             {/* Expanded: a group label. Collapsed: a rule, so the grouping survives. */}

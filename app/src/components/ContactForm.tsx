@@ -4,12 +4,17 @@ import { listDistinctCompanies, insertContact } from '../lib/contacts';
 interface Props {
   onClose: () => void;
   onSaved: () => void;
+  /** When set, the saved contact is linked to this application — used by the dossier's
+   * Contacts tab, where "add a contact" should mean "add a contact for THIS role". */
+  applicationId?: string | null;
+  /** Prefills the company field (still editable) when adding from a dossier. */
+  defaultCompany?: string;
 }
 
-export default function ContactForm({ onClose, onSaved }: Props) {
+export default function ContactForm({ onClose, onSaved, applicationId, defaultCompany }: Props) {
   const [companies, setCompanies] = useState<string[]>([]);
   const [name, setName] = useState('');
-  const [company, setCompany] = useState('');
+  const [company, setCompany] = useState(defaultCompany ?? '');
   const [roleTitle, setRoleTitle] = useState('');
   const [email, setEmail] = useState('');
   const [linkedin, setLinkedin] = useState('');
@@ -33,7 +38,7 @@ export default function ContactForm({ onClose, onSaved }: Props) {
         email: email.trim() || null,
         linkedin: linkedin.trim() || null,
         warmth,
-        application_id: null,
+        application_id: applicationId ?? null,
       });
       onSaved();
     } catch (err) {

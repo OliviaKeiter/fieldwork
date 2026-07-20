@@ -14,8 +14,14 @@ import {
   type ResumeLayoutId,
   type ResumeColorId,
 } from '../lib/resumeDocx';
-import { buildCoverLetterDocx, printCoverLetter } from '../lib/coverLetterDocx';
-import { getResumeStyleSettings, upsertSetting } from '../lib/settings';
+import { buildCoverLetterDocx, printCoverLetter, stripSignOff } from '../lib/coverLetterDocx';
+import {
+  getResumeStyleSettings,
+  getCoverLetterSettings,
+  upsertSetting,
+  DEFAULT_COVER_LETTER_SETTINGS,
+  type CoverLetterSettings,
+} from '../lib/settings';
 import type { FwApplication, FwDraft, FwDraftType, FwProfile } from '../lib/types';
 import BuildProgress from './BuildProgress';
 
@@ -78,6 +84,13 @@ export default function DraftPanel({ type, context, subjectLabel, bodyPrefix, on
   const [exportReady, setExportReady] = useState(false);
   const [docxState, setDocxState] = useState<'idle' | 'working' | 'done'>('idle');
 
+  // Sign-off fields — their own inputs, NEVER part of the body text (a sign-off in the
+  // body prints twice; see stripSignOff). Prefilled from the saved cover_letter settings,
+  // name falling back to the career record's contact.
+  const [signOff, setSignOff] = useState(DEFAULT_COVER_LETTER_SETTINGS.signoff);
+  const [signName, setSignName] = useState('');
+  const clSettings = useRef<CoverLetterSettings>(DEFAULT_COVER_LETTER_SETTINGS);
+
   useEffect(() => {
     if (!isCoverLetter || !context.application_id) return;
     let cancelled = false;
@@ -85,12 +98,18 @@ export default function DraftPanel({ type, context, subjectLabel, bodyPrefix, on
       getResumeStyleSettings().catch(() => null),
       getApplication(context.application_id),
       getProfile(),
+      getCoverLetterSettings().catch(() => DEFAULT_COVER_LETTER_SETTINGS),
     ])
-      .then(([savedStyle, app, prof]) => {
+      .then(([savedStyle, app, prof, clPrefs]) => {
         if (cancelled) return;
         if (savedStyle) setStyle(resolveResumeStyle(savedStyle));
         setApplication(app);
         setProfile(prof);
+        clSettings.current = clPrefs;
+        setSignOff(clPrefs.signoff || DEFAULT_COVER_LETTER_SETTINGS.signoff);
+        const contactName =
+          app?.resume_content?.contact?.name || contactFromCareerRecord(prof?.career_record).name;
+        setSignName(clPrefs.name || contactName || '');
         setExportReady(true);
       })
       .catch(() => {
@@ -101,6 +120,13 @@ export default function DraftPanel({ type, context, subjectLabel, bodyPrefix, on
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCoverLetter, context.application_id]);
+
+  /** Persists the sign-off fields as the new defaults (fire-and-forget, keeps tone). */
+  function saveSignOffPrefs() {
+    const next = { ...clSettings.current, signoff: signOff.trim(), name: signName.trim() };
+    clSettings.current = next;
+    upsertSetting('cover_letter', next).catch(() => {});
+  }
 
   // Same persisted settings the ResumeStudio picker writes — changing them here keeps the
   // next resume export matched to the letter. Fire-and-forget, never blocks the export.
@@ -134,7 +160,10 @@ export default function DraftPanel({ type, context, subjectLabel, bodyPrefix, on
     setErrorMessage(null);
     try {
       const contact = letterContact();
-      const blob = await buildCoverLetterDocx({ contact, body }, style);
+      const blob = await buildCoverLetterDocx(
+        { contact, body, signOff, signatureName: signName },
+        style
+      );
       downloadBlob(blob, letterFileName(contact.name));
       setDocxState('done');
     } catch (err) {
@@ -145,7 +174,10 @@ export default function DraftPanel({ type, context, subjectLabel, bodyPrefix, on
 
   function handlePrintLetter() {
     setErrorMessage(null);
-    printCoverLetter({ contact: letterContact(), body }, style);
+    printCoverLetter(
+      { contact: letterContact(), body, signOff, signatureName: signName },
+      style
+    );
   }
 
   async function generate() {
@@ -154,7 +186,11 @@ export default function DraftPanel({ type, context, subjectLabel, bodyPrefix, on
     setErrorMessage(null);
     setCopyState('idle');
     try {
-      const generatedBody = await generateDraftBody(type, context);
+      const rawBody = await generateDraftBody(type, context);
+      // Cover letters: the sign-off lives in its own fields, never the body (it would
+      // print twice). The edge function is told not to write one; this catches stragglers
+      // and pre-redeploy installs.
+      const generatedBody = isCoverLetter ? stripSignOff(rawBody) : rawBody;
       const generated = bodyPrefix ? `${bodyPrefix}${generatedBody}` : generatedBody;
       const saved = await insertDraft({
         type,
@@ -170,9 +206,11 @@ export default function DraftPanel({ type, context, subjectLabel, bodyPrefix, on
       setState('ready');
       if (context.application_id && !draftEventLogged.current) {
         draftEventLogged.current = true;
+        // "drafted", not "answered" — Mark sent logs its own event (in markDraftSent), so
+        // the timeline reads as the two real state changes: drafted, then sent.
         const eventBody =
           type === 'application_question'
-            ? `Application question answered: ${(context.extra_context ?? '').slice(0, 60)}`
+            ? `Application question drafted: ${(context.extra_context ?? '').slice(0, 60)}`
             : `${TYPE_LABEL[type]} drafted`;
         // Non-fatal — a missed timeline note must never block the draft itself.
         insertEvent(context.application_id, 'note', eventBody).catch(() => {});
@@ -201,7 +239,12 @@ export default function DraftPanel({ type, context, subjectLabel, bodyPrefix, on
 
   async function handleCopy() {
     try {
-      await navigator.clipboard.writeText(body);
+      // Cover letters copy WITH the sign-off appended — pasted into a portal it should be
+      // the complete letter, even though the body box deliberately doesn't contain it.
+      const text = isCoverLetter
+        ? `${body.trimEnd()}\n\n${signOff.trim()}\n${signName.trim()}`.trimEnd()
+        : body;
+      await navigator.clipboard.writeText(text);
       setCopyState('copied');
       setTimeout(() => setCopyState('idle'), 1500);
     } catch {
@@ -263,6 +306,34 @@ export default function DraftPanel({ type, context, subjectLabel, bodyPrefix, on
 
             {isCoverLetter && (
               <div className="flex flex-col gap-2 rounded-lg border border-border bg-bg/50 p-3">
+                <p className="text-xs uppercase tracking-wide text-text-dim">Sign-off</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="flex flex-col gap-1 text-xs text-text-dim">
+                    Closing line
+                    <input
+                      value={signOff}
+                      onChange={(e) => setSignOff(e.target.value)}
+                      onBlur={saveSignOffPrefs}
+                      placeholder="Best wishes,"
+                      className="rounded-lg border border-border bg-bg px-3 py-1.5 text-sm text-text outline-none focus:border-accent"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs text-text-dim">
+                    Name
+                    <input
+                      value={signName}
+                      onChange={(e) => setSignName(e.target.value)}
+                      onBlur={saveSignOffPrefs}
+                      placeholder="Your name"
+                      className="rounded-lg border border-border bg-bg px-3 py-1.5 text-sm text-text outline-none focus:border-accent"
+                    />
+                  </label>
+                </div>
+                <p className="text-xs text-text-dim">
+                  Kept out of the letter text so it can never print twice — Copy, .docx, and
+                  PDF all add it as its own block. Saved as your default; a tone preference
+                  lives in Settings → Cover letters.
+                </p>
                 <p className="text-xs uppercase tracking-wide text-text-dim">
                   Layout (matches your resume)
                 </p>

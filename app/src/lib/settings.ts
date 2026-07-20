@@ -62,6 +62,29 @@ export async function getWhimsyLevel(): Promise<WhimsyLevel> {
   return (all.whimsy as WhimsyLevel | undefined) ?? 'gentle';
 }
 
+/** Cover letter preferences. The sign-off lives HERE, never in the generated body text —
+ * the docx/print renderers append it as their own block, so it can't double when a body
+ * happens to end with one (the old failure mode). `name` empty = use the career-record
+ * contact name. `tone` is free-text guidance injected into the cover-letter generation
+ * prompt (how blunt vs. restrained, length preferences, anything). */
+export interface CoverLetterSettings {
+  signoff: string;
+  name: string;
+  tone: string;
+}
+
+export const DEFAULT_COVER_LETTER_SETTINGS: CoverLetterSettings = {
+  signoff: 'Best wishes,',
+  name: '',
+  tone: '',
+};
+
+export async function getCoverLetterSettings(): Promise<CoverLetterSettings> {
+  const all = await getAllSettings();
+  const stored = (all.cover_letter ?? {}) as Partial<CoverLetterSettings>;
+  return { ...DEFAULT_COVER_LETTER_SETTINGS, ...stored };
+}
+
 /** Board column order for the Pipeline. Reads `fw_settings.board_columns` if the key
  * exists; otherwise falls back to the `fw_status` enum order (still read from the type
  * definition, not a magic list re-typed at every call site). */

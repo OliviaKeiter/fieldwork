@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { IconChevronDown } from './icons';
-import { getApplication, insertEvent, setStatus } from '../lib/applications';
+import { IconChevronDown, IconEdit } from './icons';
+import {
+  getApplication,
+  insertEvent,
+  setStatus,
+  updateApplicationDetails,
+} from '../lib/applications';
 import { listEvents, listJds, listContactsForApp, listPrepDocs, listDraftsForApp } from '../lib/dossier';
 import { dateInputToDate, formatDate, localDateString } from '../lib/dateUtils';
 import { STATUS_LABEL, STATUS_ORDER } from '../lib/pipeline';
 import { RESUME_EVENT_PREFIX, parseResumeEventBody } from '../lib/resume';
 import ResumeStudio from './ResumeStudio';
+import OrbitBadge from './OrbitBadge';
+import ContactForm from './ContactForm';
 import PrepPanel from './PrepPanel';
 import DraftPanel from './DraftPanel';
 import HistoryPanel from './HistoryPanel';
@@ -125,6 +132,46 @@ export default function DossierTabs({ applicationId }: Props) {
   const [logError, setLogError] = useState<string | null>(null);
   const [rejectionHint, setRejectionHint] = useState(false);
   const [showCoverLetterDraft, setShowCoverLetterDraft] = useState(false);
+  const [showContactForm, setShowContactForm] = useState(false);
+
+  // Inline company/title editing: intake extraction gets these wrong sometimes (a blank
+  // field files as "(unknown)"), and everything downstream — dedupe, drafts, file names —
+  // keys off them, so they are correctable right where you notice the mistake.
+  const [editingHeader, setEditingHeader] = useState(false);
+  const [editCompany, setEditCompany] = useState('');
+  const [editTitle, setEditTitle] = useState('');
+  const [savingHeader, setSavingHeader] = useState(false);
+  const [headerError, setHeaderError] = useState<string | null>(null);
+
+  function startHeaderEdit() {
+    if (!application) return;
+    setEditCompany(application.company === '(unknown)' ? '' : application.company);
+    setEditTitle(application.title ?? '');
+    setHeaderError(null);
+    setEditingHeader(true);
+  }
+
+  async function saveHeaderEdit(e: FormEvent) {
+    e.preventDefault();
+    if (!editCompany.trim()) {
+      setHeaderError('Company name cannot be empty.');
+      return;
+    }
+    setSavingHeader(true);
+    setHeaderError(null);
+    try {
+      await updateApplicationDetails(applicationId, {
+        company: editCompany.trim(),
+        title: editTitle.trim() || null,
+      });
+      setEditingHeader(false);
+      await load();
+    } catch (err) {
+      setHeaderError(err instanceof Error ? err.message : 'Could not save the changes.');
+    } finally {
+      setSavingHeader(false);
+    }
+  }
 
   // Application questions: poster-written free-text prompts on the application form.
   // Each question runs the standard draft flow (generate → edit → copy → saved fw_drafts
@@ -145,7 +192,9 @@ export default function DossierTabs({ applicationId }: Props) {
   }
 
   const load = useCallback(async () => {
-    setState('loading');
+    // First load shows the loading screen; later calls are background refreshes that must
+    // NOT unmount the tab panels — ResumeStudio keeps in-progress edits in local state.
+    setState((s) => (s === 'ready' ? s : 'loading'));
     try {
       const app = await getApplication(applicationId);
       if (!app) {
@@ -241,29 +290,92 @@ export default function DossierTabs({ applicationId }: Props) {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <p className="text-xs uppercase tracking-wide text-text-dim">
             {STATUS_LABEL[application.status as FwStatus] ?? application.status}
           </p>
-          <h1 className="mt-1 text-xl font-semibold text-text">{application.company}</h1>
-          <p className="text-sm text-text-dim">{application.title ?? 'Untitled role'}</p>
+          {editingHeader ? (
+            <form onSubmit={saveHeaderEdit} className="mt-1 flex max-w-md flex-col gap-2">
+              <input
+                value={editCompany}
+                onChange={(e) => setEditCompany(e.target.value)}
+                placeholder="Company"
+                autoFocus
+                aria-label="Company"
+                className="rounded-lg border border-border bg-bg px-3 py-1.5 text-lg font-semibold text-text outline-none focus:border-accent"
+              />
+              <input
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                placeholder="Role title"
+                aria-label="Role title"
+                className="rounded-lg border border-border bg-bg px-3 py-1.5 text-sm text-text outline-none focus:border-accent"
+              />
+              <div className="flex items-center gap-2">
+                <button
+                  type="submit"
+                  disabled={savingHeader}
+                  className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50"
+                >
+                  {savingHeader ? 'Saving…' : 'Save'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingHeader(false)}
+                  className="rounded-lg border border-border px-3 py-1.5 text-xs text-text-dim transition-colors hover:text-text"
+                >
+                  Cancel
+                </button>
+                {headerError && <span className="text-xs text-danger">{headerError}</span>}
+              </div>
+            </form>
+          ) : (
+            <>
+              <div className="group flex items-center gap-2">
+                <h1 className="mt-1 truncate text-xl font-semibold text-text">
+                  {application.company}
+                </h1>
+                <button
+                  type="button"
+                  onClick={startHeaderEdit}
+                  aria-label="Edit company and title"
+                  title="Edit company and title"
+                  className="mt-1 rounded-lg p-1 text-text-dim opacity-0 transition-opacity hover:bg-surface-2 hover:text-text focus-visible:opacity-100 group-hover:opacity-100"
+                >
+                  <IconEdit className="h-4 w-4" />
+                </button>
+              </div>
+              <p className="text-sm text-text-dim">{application.title ?? 'Untitled role'}</p>
+            </>
+          )}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setShowCoverLetterDraft(true)}
-            className="rounded-lg border border-border px-3 py-1.5 text-xs text-text transition-colors hover:bg-surface-2"
-          >
-            Draft cover letter
-          </button>
-          <button
-            type="button"
-            disabled={resumeBuilding}
-            onClick={handleHeaderBuildResume}
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50"
-          >
-            {resumeBuilding ? 'Building…' : 'Build resume'}
-          </button>
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <div className="flex items-center gap-2">
+            <OrbitBadge status={application.status} appId={application.id} />
+            <button
+              type="button"
+              onClick={() => setShowCoverLetterDraft(true)}
+              className="rounded-lg border border-border px-3 py-1.5 text-xs text-text transition-colors hover:bg-surface-2"
+            >
+              Draft cover letter
+            </button>
+            <button
+              type="button"
+              disabled={resumeBuilding}
+              onClick={handleHeaderBuildResume}
+              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {resumeBuilding ? 'Building…' : 'Build resume'}
+            </button>
+          </div>
+          {/* The scorecard grade, same badge the JD tab renders — surfaced here so a card's
+              grade is visible the moment the dossier opens, on every tab. */}
+          {application.grade && (
+            <span className="flex items-center gap-2">
+              <GradeBadge grade={application.grade} small />
+              <span className="text-xs text-text-dim">{GRADE_META[application.grade].gloss}</span>
+            </span>
+          )}
         </div>
       </div>
 
@@ -525,7 +637,10 @@ export default function DossierTabs({ applicationId }: Props) {
         </div>
       )}
 
-      {tab === 'resume' && (
+      {/* Hidden rather than unmounted when another tab is open: a built (or half-edited)
+          resume must survive hopping to the JD tab and back. The display:none wrapper also
+          keeps the studio's print-only markup out of Ctrl+P on other tabs. */}
+      <div className={tab === 'resume' ? undefined : 'hidden'}>
         <ResumeStudio
           application={application}
           onBuilt={load}
@@ -533,10 +648,19 @@ export default function DossierTabs({ applicationId }: Props) {
           onAutoBuildConsumed={() => setPendingResumeBuild(false)}
           onBuildingChange={setResumeBuilding}
         />
-      )}
+      </div>
 
       {tab === 'contacts' && (
         <div className="flex flex-col gap-3">
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowContactForm(true)}
+              className="rounded-lg border border-border px-3 py-1.5 text-xs text-text transition-colors hover:bg-surface-2"
+            >
+              + Add contact
+            </button>
+          </div>
           {contacts.length === 0 ? (
             <p className="text-sm text-text-dim">
               No contacts linked to this application yet.
@@ -546,9 +670,39 @@ export default function DossierTabs({ applicationId }: Props) {
               <div key={c.id} className="rounded-xl border border-border bg-surface p-4 text-sm">
                 <p className="font-medium text-text">{c.name}</p>
                 <p className="text-text-dim">{c.role_title ?? '—'}</p>
+                {(c.email || c.linkedin) && (
+                  <p className="mt-1 flex flex-wrap gap-x-3 text-xs text-text-dim">
+                    {c.email && (
+                      <a href={`mailto:${c.email}`} className="hover:text-text">
+                        {c.email}
+                      </a>
+                    )}
+                    {c.linkedin && (
+                      <a
+                        href={c.linkedin.startsWith('http') ? c.linkedin : `https://${c.linkedin}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="hover:text-text"
+                      >
+                        LinkedIn
+                      </a>
+                    )}
+                  </p>
+                )}
                 <p className="mt-1 text-xs text-text-dim capitalize">Warmth: {c.warmth}</p>
               </div>
             ))
+          )}
+          {showContactForm && (
+            <ContactForm
+              applicationId={applicationId}
+              defaultCompany={application.company}
+              onClose={() => setShowContactForm(false)}
+              onSaved={() => {
+                setShowContactForm(false);
+                load();
+              }}
+            />
           )}
         </div>
       )}
@@ -576,6 +730,11 @@ export default function DossierTabs({ applicationId }: Props) {
           onClose={() => {
             setShowQuestionDraft(false);
             setQuestionText('');
+            // The panel logged "drafted" (and possibly "sent") events while open — a
+            // background refresh (no loading flash) puts them on the Timeline and flips
+            // the History chip to Sent without a reload. Covers Mark sent too, which
+            // closes the panel.
+            void load();
           }}
         />
       )}
@@ -585,7 +744,10 @@ export default function DossierTabs({ applicationId }: Props) {
           type="cover_letter"
           context={{ application_id: applicationId }}
           subjectLabel={`Cover letter — ${application.company}`}
-          onClose={() => setShowCoverLetterDraft(false)}
+          onClose={() => {
+            setShowCoverLetterDraft(false);
+            void load();
+          }}
         />
       )}
     </div>

@@ -2,6 +2,7 @@
 import '../styles/global.css';
 import Sidebar from '../components/Sidebar';
 import SessionGuard from '../components/SessionGuard';
+import CommandPalette from '../components/CommandPalette';
 import type { NavKey } from '../components/Sidebar';
 
 interface Props {
@@ -46,6 +47,7 @@ const { title, active, description } = Astro.props;
   </head>
   <body class="bg-bg text-text">
     <SessionGuard client:load />
+    <CommandPalette client:load />
     <a
       href="#main"
       class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:border focus:border-border focus:bg-surface-2 focus:px-3 focus:py-2 focus:text-sm focus:text-text"

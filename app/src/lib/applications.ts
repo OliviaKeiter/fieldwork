@@ -11,6 +11,20 @@ export async function listApplications(): Promise<FwApplication[]> {
   return data ?? [];
 }
 
+/** Corrects the company/title on a row — the intake extraction gets these wrong sometimes
+ * (or the user filed with blanks), and every dedupe and draft downstream keys off them, so
+ * they need to be fixable in place. */
+export async function updateApplicationDetails(
+  id: string,
+  fields: { company: string; title: string | null }
+): Promise<void> {
+  const { error } = await supabase
+    .from('fw_applications')
+    .update(fields as never)
+    .eq('id', id);
+  if (error) throw error;
+}
+
 export async function getApplication(id: string): Promise<FwApplication | null> {
   const { data, error } = await supabase
     .from('fw_applications')

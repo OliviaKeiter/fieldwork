@@ -2,7 +2,7 @@
 
 [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/OliviaKeiter/fieldwork)
 
-Fieldwork is a self-hosted, single-user job-search cockpit. It replaces the spreadsheet, the sticky notes, and the "did I ever follow up with them?" anxiety with one app: a pipeline kanban, a daily action queue computed from your own timing rules, an AI scorecard and intake flow with optional web sourcing, a resume studio (two layouts, six color themes, docx/PDF export), interview prep docs, outreach drafts, an insights view built from your lessons-learned log, and a full data export so your data can always walk out the door. Built on Astro + React + Tailwind + Supabase + Claude.
+Fieldwork is a self-hosted, single-user job-search cockpit. It replaces the spreadsheet, the sticky notes, and the "did I ever follow up with them?" anxiety with one app: a pipeline kanban, a daily action queue computed from your own timing rules, an AI scorecard and intake flow with optional web sourcing, a resume studio (two layouts, six color themes, docx/PDF export), interview prep docs, outreach drafts, an insights view built from your lessons-learned log, a constellation view that draws your pipeline as a small interactive universe, and a full data export so your data can always walk out the door. Built on Astro + React + Tailwind + Supabase + Claude.
 
 ## Features
 
@@ -14,6 +14,8 @@ Fieldwork is a self-hosted, single-user job-search cockpit. It replaces the spre
 - **Interview prep**: per-round prep docs generated from the stored JD, your record, and your lessons log. Debrief forms feed thank-you drafts.
 - **Outreach drafts**: hello / nudge / thank-you / stay-in-touch / cover letter. Drafts only. The app never sends anything; you get Copy and Mark Sent buttons.
 - **Insights**: KPI tiles, funnel, stage conversion, effectiveness by source/title/grade, deaths-by-stage, clustered rejection reasons, title win-rates, and weekly velocity — with panels you can reorder or hide.
+- **Constellation**: your whole search as a small interactive universe. Every role is a star, colored by stage; the further it advances, the closer it drifts to the glowing core (an offer is almost home). Drag to spin, scroll to zoom, click a star to open its dossier. Closed-out roles fade into the outer dust. The sky is the app's running theme: every dossier carries an orbit badge showing how many rings that role is from the core, dragging a card to Offer bursts into stars (whimsy-gated, of course), empty screens are uncharted sky, shooting stars cross the login page, and the 404 page is lost in the dust.
+- **Command palette**: Ctrl/Cmd+K from anywhere to jump to any company, contact, or page.
 - **Data export**: csv/markdown export of everything.
 
 ## Screenshots

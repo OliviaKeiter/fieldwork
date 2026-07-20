@@ -1,11 +1,16 @@
 import { supabase } from './supabase';
 import { invokeFn } from './functions';
 import { FW_GRADES } from './types';
-import type { FwGrade, FwIntakeRunItem } from './types';
+import type { FwGrade, FwIntakeRunItem, FwStatus } from './types';
 
 /** Shape returned by the `scorecard` edge function (and, per-candidate, by `daily_loop`). */
 export interface VerdictCard {
   grade: FwGrade;
+  /** Extracted from the JD by the model when the user left the intake fields blank
+   * (user-typed values win server-side). Optional: daily_loop rows carry these at the
+   * top level instead. */
+  company?: string | null;
+  title?: string | null;
   comp_min: number | null;
   comp_max: number | null;
   remote_type: string | null;
@@ -49,11 +54,50 @@ export async function runScorecard(input: {
   return invokeFn<VerdictCard>('scorecard', input);
 }
 
-/** The key every dedupe in the system agrees on — mirrors daily_loop's case-insensitive
- * company+title match against fw_applications. "Pending" below means exactly "daily_loop
- * would not skip this as a duplicate". */
+/** Identity key for cards within a list (React keys, removal after filing). Exact
+ * company+title, case-insensitive. For dedupe against the pipeline use matchKeys — this
+ * one is deliberately strict so two distinct cards never collapse mid-session. */
 export function pendingKey(company: string, title: string | null | undefined): string {
   return `${company.trim().toLowerCase()}::${(title ?? '').trim().toLowerCase()}`;
+}
+
+function normToken(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+/** All keys under which a company+title pair counts as "the same role" — the dedupe every
+ * part of the system agrees on, mirrored verbatim in daily_loop's server-side skip.
+ *
+ * The scoring model extracts the company name slightly differently run to run ("Precision
+ * AQ", "PrecisionAQ / Precision Medicine Group", "Precision AQ (Precision Medicine
+ * Group)"), and an exact string match waves every variant through as a "new" role. So
+ * alongside the full normalized name, each slash/paren-delimited segment gets its own key.
+ * Titles still match exactly (normalized) — the segment keys only collide when the title
+ * matches too, which keeps false positives rare. Deliberately NOT split on hyphens or
+ * commas: "Coca-Cola" and "G-P" are one name, not two. */
+export function matchKeys(company: string, title: string | null | undefined): string[] {
+  const t = normToken(title ?? '');
+  const names = new Set<string>();
+  const full = normToken(company);
+  if (full) names.add(full);
+  for (const part of company.split(/[/()|]/)) {
+    const p = normToken(part);
+    if (p) names.add(p);
+  }
+  return [...names].map((n) => `${n}::${t}`);
+}
+
+/** Canonical form of a posting URL for dedupe: host + path, no protocol/www/query/hash.
+ * The same Greenhouse rec arrives as http and https, with and without tracking params —
+ * all of those are one role. Mirrored verbatim in daily_loop. */
+export function normalizeJobUrl(u: string | null | undefined): string | null {
+  if (!u) return null;
+  try {
+    const parsed = new URL(u);
+    return (parsed.host.replace(/^www\./, '') + parsed.pathname.replace(/\/+$/, '')).toLowerCase();
+  } catch {
+    return null;
+  }
 }
 
 /** Every graded card not yet filed or passed on — the persistent review queue.
@@ -62,11 +106,12 @@ export function pendingKey(company: string, title: string | null | undefined): s
  * fw_intake_run_items, and filing/discarding writes an fw_applications row (to_apply or
  * passed). So "graded item with no matching application" is precisely "card the user has
  * not dealt with yet", across page reloads, with no extra bookkeeping to get wrong.
- * Deduped by company+title (a role re-scored in a later run shows once, newest grade),
- * sorted best grade first. Capped at the 200 newest graded items — beyond that a card is
- * stale enough that re-scoring it is more honest than reviewing it. */
+ * Deduped by company-variant+title keys AND by canonical posting URL (a role re-scored in
+ * a later run — or re-extracted under a slightly different company name — shows once,
+ * newest grade), sorted best grade first. Capped at the 200 newest graded items — beyond
+ * that a card is stale enough that re-scoring it is more honest than reviewing it. */
 export async function loadPendingCards(): Promise<DailyLoopResult[]> {
-  const [itemsRes, appsRes] = await Promise.all([
+  const [itemsRes, appsRes, jdsRes] = await Promise.all([
     supabase
       .from('fw_intake_run_items')
       .select('*')
@@ -74,21 +119,29 @@ export async function loadPendingCards(): Promise<DailyLoopResult[]> {
       .order('created_at', { ascending: false })
       .limit(200),
     supabase.from('fw_applications').select('company, title'),
+    supabase.from('fw_jds').select('url'),
   ]);
   if (itemsRes.error) throw itemsRes.error;
   if (appsRes.error) throw appsRes.error;
+  if (jdsRes.error) throw jdsRes.error;
 
-  const existing = new Set(
-    ((appsRes.data ?? []) as { company: string; title: string | null }[]).map((a) =>
-      pendingKey(a.company, a.title)
-    )
+  const existing = new Set<string>();
+  for (const a of (appsRes.data ?? []) as { company: string; title: string | null }[]) {
+    for (const k of matchKeys(a.company, a.title)) existing.add(k);
+  }
+  const existingUrls = new Set(
+    ((jdsRes.data ?? []) as { url: string | null }[])
+      .map((j) => normalizeJobUrl(j.url))
+      .filter((u): u is string => u !== null)
   );
   const seen = new Set<string>();
   const pending: FwIntakeRunItem[] = [];
   for (const item of (itemsRes.data ?? []) as FwIntakeRunItem[]) {
-    const key = pendingKey(item.company, item.title);
-    if (existing.has(key) || seen.has(key)) continue;
-    seen.add(key);
+    const keys = matchKeys(item.company, item.title);
+    if (keys.some((k) => existing.has(k) || seen.has(k))) continue;
+    const urlKey = normalizeJobUrl(item.url);
+    if (urlKey && existingUrls.has(urlKey)) continue;
+    for (const k of keys) seen.add(k);
     pending.push(item);
   }
   // Stable sort: items arrive newest-first, so within a grade the newest card stays on top.
@@ -122,6 +175,41 @@ export function itemToResult(item: FwIntakeRunItem): DailyLoopResult {
     live_checked_at: item.live_checked_at,
     liveness_note: item.liveness_note,
   };
+}
+
+/** A duplicate row from a run, joined to the pipeline row that blocked it. */
+export interface DuplicateMatch extends DailyLoopResult {
+  application_id: string | null;
+  application_status: FwStatus | null;
+}
+
+/** Resolves each duplicate a run reported to the fw_applications row it collided with,
+ * using the same company-variant+title keys the edge function dedupes on — so "skipped as
+ * duplicate" can render as a real link to the dossier instead of a bare count. A row that
+ * can't be matched (renamed since the run, say) comes back with null ids and renders
+ * without the link. */
+export async function resolveDuplicates(dupes: DailyLoopResult[]): Promise<DuplicateMatch[]> {
+  if (dupes.length === 0) return [];
+  const { data, error } = await supabase
+    .from('fw_applications')
+    .select('id, company, title, status');
+  if (error) throw error;
+  const byKey = new Map<string, { id: string; company: string; title: string | null; status: FwStatus }>();
+  for (const a of (data ?? []) as { id: string; company: string; title: string | null; status: FwStatus }[]) {
+    for (const k of matchKeys(a.company, a.title)) {
+      if (!byKey.has(k)) byKey.set(k, a);
+    }
+  }
+  return dupes.map((d) => {
+    const match = matchKeys(d.company, d.title)
+      .map((k) => byKey.get(k))
+      .find((a) => a !== undefined);
+    return {
+      ...d,
+      application_id: match?.id ?? null,
+      application_status: match?.status ?? null,
+    };
+  });
 }
 
 export async function runDailyLoop(candidates: DailyLoopCandidateInput[]): Promise<DailyLoopResult[]> {

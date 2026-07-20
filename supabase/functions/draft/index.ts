@@ -40,7 +40,7 @@ const LENGTH_GUIDANCE: Record<DraftType, string> = {
   nudge: "A brief, warm follow-up on a live application, 3-5 sentences max. One hook reconnecting to why they're a fit, one clear ask (status update or next step).",
   thank_you: "A short post-interview thank-you, 4-6 sentences max. Reference something specific from the actual conversation, reinforce fit, one small forward-looking ask or note.",
   stay_in_touch: "A brief check-in to a standing contact with no active role in play, 3-5 sentences max. One hook (genuine, specific), one light ask (stay on their radar, or a quick catch-up).",
-  cover_letter: "A full but tight cover letter, 3-4 short paragraphs. Opens with the real hook connecting the candidate to this role, ties 1-2 career-record achievements directly to the JD's pain line, closes with a clear, confident ask to move forward.",
+  cover_letter: "A full but tight cover letter, 3-4 short paragraphs. Opens with the real hook connecting the candidate to this role, ties 1-2 career-record achievements directly to the JD's pain line, closes with a clear, confident ask to move forward. CRITICAL: end on that final body paragraph. Do NOT write any closing sign-off line ('Best wishes,', 'Sincerely,', etc.) and do NOT put the candidate's name at the end — the app renders the sign-off as its own block, and one in the body prints twice.",
   application_question:
     "Answer the application question passed in the additional context, directly and specifically. Default to 1-2 tight paragraphs; if the question states its own length/format requirement, follow that instead. Answer in the candidate's first-person voice, grounded in real named things from the career record (products, metrics, iterations), never generic filler. If the record genuinely doesn't support an answer, say what IS supported rather than inventing.",
 };
@@ -127,6 +127,12 @@ Deno.serve(async (req: Request) => {
     const model = resolveModel(settings, "draft");
     const profileRow = (profile ?? {}) as Record<string, unknown>;
 
+    // Optional user tone guidance for cover letters (Settings -> Cover letters): how blunt
+    // vs. restrained, length preferences, anything. Free text, injected verbatim below.
+    const coverLetterPrefs = (settings.cover_letter ?? {}) as { tone?: string };
+    const coverLetterTone =
+      type === "cover_letter" && coverLetterPrefs.tone?.trim() ? coverLetterPrefs.tone.trim() : null;
+
     let application: Record<string, unknown> | null = null;
     let jd: Record<string, unknown> | null = null;
     let events: Record<string, unknown>[] = [];
@@ -166,6 +172,7 @@ Deno.serve(async (req: Request) => {
 Style rule, absolute: NEVER use em dashes (—) or double hyphens (--) anywhere in the output. Where you would reach for an em dash, restructure the sentence or use a period, comma, or colon instead. Plain hyphens inside compound words are fine.
 
 Message type: ${type}. ${LENGTH_GUIDANCE[type]}
+${coverLetterTone ? `\nTone guidance from the user (follow it within the honesty rules above): ${coverLetterTone}` : ""}
 
 Candidate career record (markdown, the ceiling):
 ${String(profileRow.career_record ?? "(none on file)")}

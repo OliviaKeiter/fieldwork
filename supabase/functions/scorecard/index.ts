@@ -29,6 +29,8 @@ export type Grade = "A+" | "A" | "B" | "C" | "D" | "F";
 
 export interface VerdictResult {
   grade: Grade;
+  company: string | null;
+  title: string | null;
   comp_min: number | null;
   comp_max: number | null;
   remote_type: string | null;
@@ -170,6 +172,67 @@ export async function checkLiveness(url: string): Promise<LivenessResult> {
   }
 }
 
+/** Second-chance fetch through Tavily's Extract API. Their crawler renders JS and gets
+ * past most bot-walls that block a plain edge-runtime fetch, so this is worth one credit
+ * before telling the user to paste the JD by hand. Shared verbatim (by design, not
+ * import) with daily_loop — keep the two in sync. */
+export async function tavilyExtract(apiKey: string, url: string): Promise<string | null> {
+  try {
+    const res = await fetch("https://api.tavily.com/extract", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ api_key: apiKey, urls: [url], extract_depth: "advanced" }),
+    });
+    if (!res.ok) return null;
+    const payload = await res.json();
+    const raw = payload?.results?.[0]?.raw_content;
+    return typeof raw === "string" && raw.trim() ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+const WALL_SIGNALS = [
+  "additional verification required",
+  "security check",
+  "verify you are a human",
+  "verify you're a human",
+  "verifying you are human",
+  "enable javascript and cookies",
+  "just a moment",
+  "request blocked",
+  "access denied",
+  "are you a robot",
+  "captcha",
+];
+
+const JD_SIGNALS = [
+  "responsibilities",
+  "qualifications",
+  "requirements",
+  "what you'll do",
+  "what you will do",
+  "about the role",
+  "about this role",
+  "who you are",
+  "we are looking for",
+  "we're looking for",
+  "years of experience",
+  "equal opportunity",
+];
+
+/** Heuristic gate: does this text plausibly contain an actual job description, as opposed
+ * to a bot-check page, a sign-in shell, or theme-config JSON? Only applied to URL-fetched
+ * text — JD text the user pasted is always trusted. Shared verbatim with daily_loop. */
+export function looksLikeJd(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const t = text.toLowerCase();
+  if (t.length < 500) return false;
+  // A wall phrase on a short page is a wall; on a long page it may be footer noise.
+  if (t.length < 4000 && WALL_SIGNALS.some((s) => t.includes(s))) return false;
+  return JD_SIGNALS.some((s) => t.includes(s));
+}
+
 const VERDICT_TOOL = {
   name: "emit_verdict",
   description: "Emit the structured scorecard verdict for this job description.",
@@ -180,6 +243,15 @@ const VERDICT_TOOL = {
         type: "string",
         enum: ["A+", "A", "B", "C", "D", "F"],
         description: "Letter grade for how good this role is for this candidate.",
+      },
+      company: {
+        type: ["string", "null"],
+        description:
+          'The hiring company\'s name, as stated anywhere in the posting or clearly inferable from it (the header, "About us", product names, the posting URL). Null only if genuinely absent.',
+      },
+      title: {
+        type: ["string", "null"],
+        description: "The role title as the posting states it; null if genuinely absent.",
       },
       comp_min: { type: ["number", "null"] },
       comp_max: { type: ["number", "null"] },
@@ -238,6 +310,8 @@ Evaluate the job description strictly in this order, per the resume-builder meth
 
 Extract comp_min/comp_max (numbers, annual USD, null if not determinable), remote_type (the working arrangement — e.g. "remote", "hybrid", "onsite"; null if unclear), and location (the specific place the posting states — the city or cities, e.g. "San Francisco, CA" or "San Francisco or New York (onsite)" or "Remote (US)"; null if truly unspecified) from the JD text itself. remote_type is the arrangement; location is the actual where — fill both.
 
+Also extract company (the hiring company's name) and title (the role title). The company name is almost always somewhere in the posting — the header, the "About us" paragraph, product names, or the URL — so look hard before returning null; a card labelled "(unknown)" costs the user a manual fix later.
+
 Grade the role on this scale. You are grading the ROLE as an opportunity for this candidate — not grading the candidate, and not grading the quality of the job posting's writing:
 - "A+" — matches a target title, matches remote preferences, no blockers, and a stated range that clears the floor. Rare. Reserve it: if you are talking yourself into it, it is an A.
 - "A" — strong fit, apply now. Title and location work; any gaps are minor. A role matching a target title with no stated comp and no blockers belongs here or at B, never lower.
@@ -287,6 +361,8 @@ List concrete gaps as short strings. Write one pain_line naming the real pain be
     // closer) is the honest default. Never fall back to a grade that reads as a
     // recommendation the model did not make.
     grade: input.grade ?? "C",
+    company: input.company ?? null,
+    title: input.title ?? null,
     comp_min: input.comp_min ?? null,
     comp_max: input.comp_max ?? null,
     remote_type: input.remote_type ?? null,
@@ -397,8 +473,9 @@ Deno.serve(async (req: Request) => {
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
     const body = await req.json().catch(() => ({}));
-    // company/title are not used for scoring — they ride along so the logged run item is a
-    // complete, re-filable card rather than one labelled "(unknown)".
+    // company/title are not used for scoring. If the user typed them they win; otherwise
+    // the model's own extraction (see VERDICT_TOOL) fills them, so the logged run item is
+    // a complete, re-filable card rather than one labelled "(unknown)".
     const { jd_text, url, company, title } = body as {
       jd_text?: string;
       url?: string;
@@ -437,10 +514,35 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // URL-derived text only — pasted JD text is trusted as-is. If the direct fetch got a
+    // bot-wall or shell, try Tavily's extractor before giving up.
+    if (!jd_text && url && !looksLikeJd(effectiveJdText)) {
+      const tavilyKey = Deno.env.get("TAVILY_API_KEY");
+      if (tavilyKey) {
+        const extracted = await tavilyExtract(tavilyKey, url);
+        if (extracted) {
+          const cleaned = stripHtml(extracted).slice(0, 15000);
+          if (looksLikeJd(cleaned) || !effectiveJdText) effectiveJdText = cleaned;
+        }
+      }
+    }
+
     if (!effectiveJdText) {
       return new Response(
         JSON.stringify({
           error: "Could not obtain job description text from that URL — paste the JD text directly instead.",
+        }),
+        { status: 400, headers: { ...CORS_HEADERS, "content-type": "application/json" } }
+      );
+    }
+
+    // Grading a bot-check page fabricates an F/D card out of zero substance. Refuse
+    // honestly instead, before spending the Claude call.
+    if (!jd_text && !looksLikeJd(effectiveJdText)) {
+      return new Response(
+        JSON.stringify({
+          error:
+            "That URL served a bot-check or empty shell instead of the posting — open it in a browser and paste the JD text directly instead.",
         }),
         { status: 400, headers: { ...CORS_HEADERS, "content-type": "application/json" } }
       );
@@ -466,8 +568,9 @@ Deno.serve(async (req: Request) => {
       [
         {
           ...scored,
-          company: company ?? "(unknown)",
-          title: title ?? null,
+          // What the user typed wins; the model's extraction fills the blanks.
+          company: company ?? scored.company ?? "(unknown)",
+          title: title ?? scored.title ?? null,
           url: url ?? null,
           jd_text: effectiveJdText,
           live_checked_at: liveCheckedAt,
@@ -479,6 +582,10 @@ Deno.serve(async (req: Request) => {
     return new Response(
       JSON.stringify({
         ...scored,
+        // User-typed values win over extraction here too, so the response card always
+        // matches what the run item logged.
+        company: company ?? scored.company ?? null,
+        title: title ?? scored.title ?? null,
         jd_text: effectiveJdText,
         live_checked_at: liveCheckedAt,
         liveness_note: livenessNote,

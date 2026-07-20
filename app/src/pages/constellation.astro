@@ -1,0 +1,12 @@
+---
+import AppShell from '../layouts/AppShell.astro';
+import ConstellationView from '../components/ConstellationView';
+---
+
+<AppShell
+  title="Constellation"
+  active="constellation"
+  description="Your whole search as a small universe. Every role is a star; the further it gets, the closer it drifts to the core."
+>
+  <ConstellationView client:load />
+</AppShell>

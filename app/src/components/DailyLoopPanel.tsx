@@ -5,11 +5,14 @@ import {
   loadPendingCards,
   pendingKey,
   recordPass,
+  resolveDuplicates,
   runDailyLoop,
   runSourcedDailyLoop,
   type DailyLoopCandidateInput,
   type DailyLoopResult,
+  type DuplicateMatch,
 } from '../lib/intake';
+import { STATUS_LABEL } from '../lib/pipeline';
 import VerdictCardView from './VerdictCardView';
 import BuildProgress from './BuildProgress';
 
@@ -81,6 +84,9 @@ export default function DailyLoopPanel() {
   const [runSummary, setRunSummary] = useState<string | null>(null);
   /** Per-candidate failures from the last run — these still get their own rows. */
   const [runErrors, setRunErrors] = useState<DailyLoopResult[]>([]);
+  /** Duplicates from the last run — each gets a "already in your pipeline" row with a
+   * link to its dossier, so a 5-JD run that returns 4 cards accounts for the fifth. */
+  const [runDuplicates, setRunDuplicates] = useState<DuplicateMatch[]>([]);
   const [cardBusy, setCardBusy] = useState<Record<string, CardBusy>>({});
   const [cardError, setCardError] = useState<Record<string, string>>({});
   const [sourceCount, setSourceCount] = useState(10);
@@ -147,6 +153,7 @@ export default function DailyLoopPanel() {
     setErrorMessage(null);
     setRunSummary(null);
     setRunErrors([]);
+    setRunDuplicates([]);
   }
 
   function finishRun(scored: DailyLoopResult[]) {
@@ -154,6 +161,20 @@ export default function DailyLoopPanel() {
     setRunSummary(summarize(scored));
     setRunErrors(scored.filter((r) => !r.duplicate && !r.expired && (r.error || !r.grade)));
     setRunState('ready');
+
+    // Duplicates still show up — as rows linking to the dossier that blocked them. The
+    // lookup is best-effort: if it fails, the rows render without links rather than
+    // vanishing back into a bare count.
+    const dupes = scored.filter((r) => r.duplicate);
+    if (dupes.length > 0) {
+      resolveDuplicates(dupes)
+        .then(setRunDuplicates)
+        .catch(() =>
+          setRunDuplicates(
+            dupes.map((d) => ({ ...d, application_id: null, application_status: null }))
+          )
+        );
+    }
   }
 
   async function handleSourceRun() {
@@ -338,6 +359,34 @@ export default function DailyLoopPanel() {
 
         {runState === 'ready' && runSummary && (
           <p className="mt-4 text-sm text-text-dim">{runSummary}</p>
+        )}
+        {runDuplicates.length > 0 && (
+          <div className="mt-3 flex flex-col gap-2">
+            {runDuplicates.map((r, i) => (
+              <div
+                key={`${pendingKey(r.company, r.title)}-${i}`}
+                className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border bg-bg/50 p-3 text-sm"
+              >
+                <span className="font-medium text-text">{r.company}</span>
+                <span className="text-text-dim">{r.title ?? 'Untitled role'}</span>
+                <span className="text-xs text-text-dim">
+                  {r.application_status === 'passed'
+                    ? 'You passed on this one earlier — not re-scored.'
+                    : `Already in your pipeline${
+                        r.application_status ? ` — ${STATUS_LABEL[r.application_status]}` : ''
+                      }.`}
+                </span>
+                {r.application_id && (
+                  <a
+                    href={`/company?id=${r.application_id}`}
+                    className="ml-auto shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs text-text transition-colors hover:bg-surface-2"
+                  >
+                    Open dossier
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
         )}
         {runState === 'error' && errorMessage && (
           <p className="mt-4 text-sm text-danger">{errorMessage}</p>

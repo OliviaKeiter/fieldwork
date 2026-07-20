@@ -53,6 +53,10 @@ export default function IntakeScreen() {
       // Snap the progress bar to 100% and let it land before the card replaces it.
       setScoreDone(true);
       await new Promise((resolve) => setTimeout(resolve, 450));
+      // Fill blanks from the model's own extraction — the form fields drive the card
+      // heading and the eventual filing, so the fix lands where the user can still edit it.
+      if (!company.trim() && result.company) setCompany(result.company);
+      if (!title.trim() && result.title) setTitle(result.title);
       setCard(result);
       setScoreState('ready');
     } catch (err) {

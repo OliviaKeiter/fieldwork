@@ -5,7 +5,10 @@ import { extractTextFromFile } from '../lib/fileExtract';
 import {
   getTimingSettings,
   getWhimsyLevel,
+  getCoverLetterSettings,
   upsertSetting,
+  DEFAULT_COVER_LETTER_SETTINGS,
+  type CoverLetterSettings,
   type TimingSettings,
   type WhimsyLevel,
 } from '../lib/settings';
@@ -48,16 +51,23 @@ export default function SettingsForm() {
   const [whimsy, setWhimsy] = useState<WhimsyLevel>('gentle');
   const [whimsySave, setWhimsySave] = useState<SaveState>('idle');
 
+  const [coverLetter, setCoverLetter] = useState<CoverLetterSettings>(
+    DEFAULT_COVER_LETTER_SETTINGS
+  );
+  const [coverLetterSave, setCoverLetterSave] = useState<SaveState>('idle');
+  const [coverLetterError, setCoverLetterError] = useState<string | null>(null);
+
   const [exportState, setExportState] = useState<'idle' | 'working' | 'error'>('idle');
   const [exportError, setExportError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const [p, t, w] = await Promise.all([
+        const [p, t, w, cl] = await Promise.all([
           getProfile(),
           getTimingSettings(),
           getWhimsyLevel(),
+          getCoverLetterSettings().catch(() => DEFAULT_COVER_LETTER_SETTINGS),
         ]);
         if (p) {
           setProfile(p);
@@ -73,6 +83,7 @@ export default function SettingsForm() {
         }
         setTiming(t);
         setWhimsy(w);
+        setCoverLetter(cl);
         setState('ready');
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : 'Failed to load settings.');
@@ -134,6 +145,25 @@ export default function SettingsForm() {
     } catch (err) {
       setRulesError(err instanceof Error ? err.message : 'Could not save the rules.');
       setRulesSave('error');
+    }
+  }
+
+  async function handleSaveCoverLetter(e: FormEvent) {
+    e.preventDefault();
+    setCoverLetterSave('saving');
+    setCoverLetterError(null);
+    try {
+      await upsertSetting('cover_letter', {
+        signoff: coverLetter.signoff.trim() || DEFAULT_COVER_LETTER_SETTINGS.signoff,
+        name: coverLetter.name.trim(),
+        tone: coverLetter.tone.trim(),
+      });
+      setCoverLetterSave('saved');
+    } catch (err) {
+      setCoverLetterError(
+        err instanceof Error ? err.message : 'Could not save the cover letter settings.'
+      );
+      setCoverLetterSave('error');
     }
   }
 
@@ -376,6 +406,59 @@ export default function SettingsForm() {
             </button>
             {rulesSave === 'saved' && <span className="text-sm text-success">Saved.</span>}
             {rulesError && <p className="text-sm text-danger">{rulesError}</p>}
+          </div>
+        </form>
+      </section>
+
+      {/* Cover letter defaults */}
+      <section className="rounded-xl border border-border bg-surface p-6">
+        <h2 className="text-lg font-medium text-text">Cover letters</h2>
+        <p className="mt-1 text-sm text-text-dim">
+          The sign-off is rendered as its own block on every export — it never lives in the
+          letter text, so it can never print twice. Tone guidance goes into the generation
+          prompt so the letter sounds like you wrote it.
+        </p>
+        <form onSubmit={handleSaveCoverLetter} className="mt-4 flex flex-col gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <label className="flex flex-col gap-1 text-sm text-text-dim">
+              Default closing line
+              <input
+                value={coverLetter.signoff}
+                onChange={(e) => setCoverLetter((c) => ({ ...c, signoff: e.target.value }))}
+                placeholder="Best wishes,"
+                className="rounded-lg border border-border bg-bg px-3 py-2 text-text outline-none focus:border-accent"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm text-text-dim">
+              Signature name
+              <input
+                value={coverLetter.name}
+                onChange={(e) => setCoverLetter((c) => ({ ...c, name: e.target.value }))}
+                placeholder="Blank = the name on your career record"
+                className="rounded-lg border border-border bg-bg px-3 py-2 text-text outline-none focus:border-accent"
+              />
+            </label>
+          </div>
+          <label className="flex flex-col gap-1 text-sm text-text-dim">
+            Tone guidance (optional)
+            <textarea
+              value={coverLetter.tone}
+              onChange={(e) => setCoverLetter((c) => ({ ...c, tone: e.target.value }))}
+              rows={3}
+              placeholder='How blunt or restrained should the letter be? e.g. "Name my gaps directly, no hedging, no flattery, keep it under 250 words" or "Warm and measured; let the work speak."'
+              className="rounded-lg border border-border bg-bg px-3 py-2 text-text outline-none focus:border-accent"
+            />
+          </label>
+          <div className="flex items-center gap-3">
+            <button
+              type="submit"
+              disabled={coverLetterSave === 'saving'}
+              className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {coverLetterSave === 'saving' ? 'Saving…' : 'Save cover letter settings'}
+            </button>
+            {coverLetterSave === 'saved' && <span className="text-sm text-success">Saved.</span>}
+            {coverLetterError && <p className="text-sm text-danger">{coverLetterError}</p>}
           </div>
         </form>
       </section>

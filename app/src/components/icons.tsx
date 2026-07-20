@@ -250,3 +250,39 @@ export function IconCheck({ className, title }: IconProps) {
     </svg>
   );
 }
+
+/** Edit: a pencil. */
+export function IconEdit({ className, title }: IconProps) {
+  return (
+    <svg {...svgProps(className, title)}>
+      {title && <title>{title}</title>}
+      <path d="M4 20l.8-3.2L15.6 6l2.4 2.4L7.2 19.2 4 20z" />
+      <path d="M13.8 7.8l2.4 2.4" />
+    </svg>
+  );
+}
+
+/** Constellation: three stars joined by sight-lines, one loose spark. */
+export function IconConstellation({ className, title }: IconProps) {
+  return (
+    <svg {...svgProps(className, title)}>
+      {title && <title>{title}</title>}
+      <circle cx="6" cy="17" r="1.5" />
+      <circle cx="11.5" cy="6.5" r="1.5" />
+      <circle cx="18.5" cy="13.5" r="1.5" />
+      <path d="M6.7 15.6l4.1-7.4M13 7.4l4.3 5" />
+      <path d="M19.5 4.5v.01M4.5 8.5v.01" />
+    </svg>
+  );
+}
+
+/** Search / jump-anywhere. */
+export function IconSearch({ className, title }: IconProps) {
+  return (
+    <svg {...svgProps(className, title)}>
+      {title && <title>{title}</title>}
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="M16 16l4.5 4.5" />
+    </svg>
+  );
+}

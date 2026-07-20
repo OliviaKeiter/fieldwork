@@ -8,6 +8,10 @@
 //      fw_profile.target_titles, extracts distinct postings via a Claude triage call,
 //      dedupes, and scores each like mode 1. Requires the TAVILY_API_KEY Supabase secret
 //      (free tier at tavily.com); returns a clear error naming the secret if unset.
+//      Searches are steered toward ATS hosts and away from bot-walled aggregators
+//      (Indeed/LinkedIn/Ladders serve checkpoints or shells to server-side fetches), and
+//      fetched text must pass a looksLikeJd gate — with a Tavily Extract second chance —
+//      before it's scored, so walls surface as error rows instead of junk F/D cards.
 // Both modes dedupe against fw_applications (case-insensitive company+title match) and for
 // every non-duplicate run the same inline scorecard logic as the `scorecard` function
 // (liveness check if a url is known, then a Claude verdict call).
@@ -402,6 +406,42 @@ function resolveModel(settings: Record<string, unknown>, action: string): string
   return models[action] ?? models.default ?? "claude-sonnet-5";
 }
 
+function normToken(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+/** All keys under which a company+title pair counts as "the same role" — mirrored verbatim
+ * in the app's intake.ts. The scoring model extracts the company name slightly differently
+ * run to run ("Precision AQ", "PrecisionAQ / Precision Medicine Group", "Precision AQ
+ * (Precision Medicine Group)"), and an exact string match waves every variant through as a
+ * "new" role. So alongside the full normalized name, each slash/paren-delimited segment
+ * gets its own key. Titles still match exactly (normalized). Deliberately NOT split on
+ * hyphens or commas: "Coca-Cola" and "G-P" are one name, not two. */
+function matchKeys(company: string, title: string | null | undefined): string[] {
+  const t = normToken(title ?? "");
+  const names = new Set<string>();
+  const full = normToken(company);
+  if (full) names.add(full);
+  for (const part of company.split(/[/()|]/)) {
+    const p = normToken(part);
+    if (p) names.add(p);
+  }
+  return [...names].map((n) => `${n}::${t}`);
+}
+
+/** Canonical form of a posting URL for dedupe: host + path, no protocol/www/query/hash.
+ * The same Greenhouse rec arrives as http and https, with and without tracking params —
+ * all of those are one role. Mirrored verbatim in the app's intake.ts. */
+function normalizeJobUrl(u: string | null | undefined): string | null {
+  if (!u) return null;
+  try {
+    const parsed = new URL(u);
+    return (parsed.host.replace(/^www\./, "") + parsed.pathname.replace(/\/+$/, "")).toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
 interface TavilyResult {
   title: string;
   url: string;
@@ -409,16 +449,58 @@ interface TavilyResult {
   raw_content?: string | null;
 }
 
-async function tavilySearch(apiKey: string, query: string): Promise<TavilyResult[]> {
+/** Aggregators that serve bot-walls or empty shells to server-side fetches (Indeed's 403
+ * checkpoint, LinkedIn's sign-in shell, Ladders' scraped stubs). A search hit on these
+ * domains almost never yields scoreable JD text, so they're excluded at the search layer
+ * rather than wasting triage + scoring calls discovering it per-run. */
+const AGGREGATOR_BLOCKLIST = [
+  "indeed.com",
+  "linkedin.com",
+  "theladders.com",
+  "glassdoor.com",
+  "ziprecruiter.com",
+  "bebee.com",
+  "lensa.com",
+  "jobrapido.com",
+  "simplyhired.com",
+  "salary.com",
+  "talent.com",
+  "jooble.org",
+  "adzuna.com",
+];
+
+/** ATS hosts that serve real JD text at HTTP 200 to plain fetches — where a sourcing run
+ * actually wants to land. */
+const ATS_HOSTS = [
+  "boards.greenhouse.io",
+  "job-boards.greenhouse.io",
+  "jobs.lever.co",
+  "jobs.ashbyhq.com",
+  "apply.workable.com",
+  "jobs.smartrecruiters.com",
+  "myworkdayjobs.com",
+  "icims.com",
+  "jobs.jobvite.com",
+  "recruitee.com",
+  "bamboohr.com",
+];
+
+async function tavilySearch(
+  apiKey: string,
+  query: string,
+  domains?: { include?: string[]; exclude?: string[] },
+): Promise<TavilyResult[]> {
   const res = await fetch("https://api.tavily.com/search", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       api_key: apiKey,
       query,
-      max_results: 8,
+      max_results: 10,
       include_raw_content: true,
       days: 30,
+      ...(domains?.include ? { include_domains: domains.include } : {}),
+      ...(domains?.exclude ? { exclude_domains: domains.exclude } : {}),
     }),
   });
   if (!res.ok) {
@@ -427,6 +509,68 @@ async function tavilySearch(apiKey: string, query: string): Promise<TavilyResult
   }
   const payload = await res.json();
   return Array.isArray(payload.results) ? (payload.results as TavilyResult[]) : [];
+}
+
+/** Second-chance fetch through Tavily's Extract API. Their crawler renders JS and gets
+ * past most bot-walls that block a plain edge-runtime fetch, so this is worth one credit
+ * before writing a candidate off as unfetchable. */
+async function tavilyExtract(apiKey: string, url: string): Promise<string | null> {
+  try {
+    const res = await fetch("https://api.tavily.com/extract", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ api_key: apiKey, urls: [url], extract_depth: "advanced" }),
+    });
+    if (!res.ok) return null;
+    const payload = await res.json();
+    const raw = payload?.results?.[0]?.raw_content;
+    return typeof raw === "string" && raw.trim() ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+const WALL_SIGNALS = [
+  "additional verification required",
+  "security check",
+  "verify you are a human",
+  "verify you're a human",
+  "verifying you are human",
+  "enable javascript and cookies",
+  "just a moment",
+  "request blocked",
+  "access denied",
+  "are you a robot",
+  "captcha",
+];
+
+const JD_SIGNALS = [
+  "responsibilities",
+  "qualifications",
+  "requirements",
+  "what you'll do",
+  "what you will do",
+  "about the role",
+  "about this role",
+  "who you are",
+  "we are looking for",
+  "we're looking for",
+  "years of experience",
+  "equal opportunity",
+];
+
+/** Heuristic gate: does this text plausibly contain an actual job description, as opposed
+ * to a bot-check page, a sign-in shell, or theme-config JSON? Scoring a wall page burns a
+ * Claude call and produces a junk F/D card that clutters the review queue — an honest
+ * "couldn't fetch" error row is strictly better, so anything failing this gate goes down
+ * that path instead. Deliberately loose: user-pasted JD text never passes through here. */
+function looksLikeJd(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const t = text.toLowerCase();
+  if (t.length < 500) return false;
+  // A wall phrase on a short page is a wall; on a long page it may be footer noise.
+  if (t.length < 4000 && WALL_SIGNALS.some((s) => t.includes(s))) return false;
+  return JD_SIGNALS.some((s) => t.includes(s));
 }
 
 const CANDIDATES_TOOL = {
@@ -480,6 +624,8 @@ async function extractCandidates(opts: {
       model,
       max_tokens: 2500,
       system: `You triage web-search results for a job-search app. From the results below, extract up to ${count} DISTINCT real, individual job postings (one specific role at one specific company, on a page where someone could apply). Exclude: job-board list/search pages, staffing-agency reposts, articles, duplicate postings of the same role, and anything that looks expired. Prefer roles whose titles match the candidate's target titles and avoid their avoid-titles.
+
+Strongly prefer URLs on the employer's own careers site or an ATS host (greenhouse.io, lever.co, ashbyhq.com, workable.com, smartrecruiters.com, myworkdayjobs.com, icims.com, and the like) over job-board aggregators (Indeed, LinkedIn, Ladders, ZipRecruiter, Glassdoor) — aggregator pages usually block automated fetches, so their candidates die downstream. If the same role appears on both, emit the employer/ATS URL.
 
 Target titles: ${Array.isArray(profile.target_titles) ? (profile.target_titles as string[]).join(", ") : "(none set)"}
 Avoid titles: ${Array.isArray(profile.avoid_titles) ? (profile.avoid_titles as string[]).join(", ") : "(none set)"}
@@ -547,11 +693,13 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const [{ data: profile }, { data: settingsRows }, { data: existingApps }] = await Promise.all([
-      supabase.from("fw_profile").select("*").limit(1).maybeSingle(),
-      supabase.from("fw_settings").select("key, value"),
-      supabase.from("fw_applications").select("company, title"),
-    ]);
+    const [{ data: profile }, { data: settingsRows }, { data: existingApps }, { data: existingJds }] =
+      await Promise.all([
+        supabase.from("fw_profile").select("*").limit(1).maybeSingle(),
+        supabase.from("fw_settings").select("key, value"),
+        supabase.from("fw_applications").select("company, title"),
+        supabase.from("fw_jds").select("url"),
+      ]);
 
     const settings: Record<string, unknown> = {};
     for (const row of (settingsRows ?? []) as { key: string; value: unknown }[]) {
@@ -559,9 +707,11 @@ Deno.serve(async (req: Request) => {
     }
     const model = resolveModel(settings, "daily_loop");
 
+    // Read outside the sourcing branch: the extract-fallback in the scoring loop uses it
+    // for paste-mode URL candidates too, when the secret happens to be set.
+    const tavilyKey = Deno.env.get("TAVILY_API_KEY") ?? null;
     let searchedQueries: string[] = [];
     if (source && candidates.length === 0) {
-      const tavilyKey = Deno.env.get("TAVILY_API_KEY");
       if (!tavilyKey) {
         return new Response(
           JSON.stringify({
@@ -583,17 +733,25 @@ Deno.serve(async (req: Request) => {
       }
 
       const wanted = Math.min(Math.max(count ?? 10, 1), 20);
-      // Search a rotating slice of target titles (3-4 queries per run keeps the free tier
-      // comfortable: ~90 runs/month at 1000 searches).
+      // Search a rotating slice of target titles, two queries each: one across ATS hosts
+      // (where server-side fetches actually get JD text) and one open-web query with the
+      // bot-walled aggregators excluded. 8 queries per run ≈ 125 runs/month on the free
+      // tier's 1000 searches — still comfortable for a few runs a day.
       const offset = Math.floor(Date.now() / 86400000) % targetTitles.length;
       const titlesToSearch = Array.from(
         { length: Math.min(4, targetTitles.length) },
         (_, i) => targetTitles[(offset + i) % targetTitles.length]
       );
-      searchedQueries = titlesToSearch.map((t) => `"${t}" remote job opening apply`);
+      const queries = titlesToSearch.flatMap((t) => [
+        { q: `"${t}" remote job opening apply`, domains: { exclude: AGGREGATOR_BLOCKLIST } },
+        { q: `${t} remote apply`, domains: { include: ATS_HOSTS } },
+      ]);
+      searchedQueries = queries.map(({ q, domains }) => (domains.include ? `[ats] ${q}` : q));
 
       const searchBatches = await Promise.all(
-        searchedQueries.map((q) => tavilySearch(tavilyKey, q).catch(() => [] as TavilyResult[]))
+        queries.map(({ q, domains }) =>
+          tavilySearch(tavilyKey, q, domains).catch(() => [] as TavilyResult[])
+        )
       );
       const seenUrls = new Set<string>();
       const merged: TavilyResult[] = [];
@@ -626,18 +784,30 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const existingKeys = new Set(
-      ((existingApps ?? []) as { company: string; title: string | null }[]).map(
-        (a) => `${a.company.trim().toLowerCase()}::${(a.title ?? "").trim().toLowerCase()}`
-      )
-    );
+    const existingKeys = new Set<string>();
+    for (const a of (existingApps ?? []) as { company: string; title: string | null }[]) {
+      for (const k of matchKeys(a.company, a.title)) existingKeys.add(k);
+    }
+    const existingUrls = new Set<string>();
+    for (const j of (existingJds ?? []) as { url: string | null }[]) {
+      const u = normalizeJobUrl(j.url);
+      if (u) existingUrls.add(u);
+    }
 
     const results = await Promise.all(
       candidates.map(async (c) => {
-        const key = `${(c.company ?? "").trim().toLowerCase()}::${(c.title ?? "").trim().toLowerCase()}`;
-        if (existingKeys.has(key)) {
+        const urlKey = normalizeJobUrl(c.url);
+        if (
+          matchKeys(c.company ?? "", c.title).some((k) => existingKeys.has(k)) ||
+          (urlKey !== null && existingUrls.has(urlKey))
+        ) {
           return { company: c.company, title: c.title ?? null, url: c.url ?? null, duplicate: true };
         }
+
+        // JD text typed/pasted by the user is trusted as-is; anything that came from a
+        // fetch (Tavily raw content, the liveness page text) has to pass the looksLikeJd
+        // gate before it's worth a scoring call.
+        const userSuppliedJd = !source && !!c.jd_text;
 
         let livenessNote: string | null = null;
         let liveCheckedAt: string | null = null;
@@ -648,6 +818,15 @@ Deno.serve(async (req: Request) => {
           livenessNote = liveness.note;
           liveCheckedAt = new Date().toISOString();
           if (!effectiveJdText && liveness.pageText) effectiveJdText = liveness.pageText;
+          // Tavily's raw content is sometimes a shell where the direct fetch got the real
+          // page — prefer whichever actually reads like a JD.
+          else if (
+            !userSuppliedJd &&
+            !looksLikeJd(effectiveJdText) &&
+            looksLikeJd(liveness.pageText)
+          ) {
+            effectiveJdText = liveness.pageText!;
+          }
 
           // A posting we can prove is dead isn't worth a Claude call or a card. Job boards
           // keep serving expired listings at HTTP 200, so without this a sourcing run fills
@@ -665,6 +844,17 @@ Deno.serve(async (req: Request) => {
           }
         }
 
+        // Second-chance fetch: a plain edge-runtime fetch gets bot-walled by many career
+        // sites; Tavily's extractor renders JS and usually gets through. One credit is
+        // cheaper than a junk card.
+        if (!userSuppliedJd && !looksLikeJd(effectiveJdText) && c.url && tavilyKey) {
+          const extracted = await tavilyExtract(tavilyKey, c.url);
+          if (extracted) {
+            const cleaned = stripHtml(extracted).slice(0, 15000);
+            if (looksLikeJd(cleaned) || !effectiveJdText) effectiveJdText = cleaned;
+          }
+        }
+
         if (!effectiveJdText) {
           return {
             company: c.company,
@@ -672,6 +862,22 @@ Deno.serve(async (req: Request) => {
             url: c.url ?? null,
             duplicate: false,
             error: "No JD text on file or fetchable from the URL — provide jd_text for this candidate.",
+          };
+        }
+
+        // Fetched text that still reads as a bot-check page or content-free shell: an
+        // honest error row beats a fabricated F/D card. Error rows don't enter the review
+        // queue, so walls stop cluttering it.
+        if (!userSuppliedJd && !looksLikeJd(effectiveJdText)) {
+          return {
+            company: c.company,
+            title: c.title ?? null,
+            url: c.url ?? null,
+            duplicate: false,
+            live_checked_at: liveCheckedAt,
+            liveness_note: livenessNote,
+            error:
+              "Couldn't retrieve the job description — the page served a bot-check or empty shell instead of the posting. Open the URL in a browser and paste the JD into a scorecard run.",
           };
         }
 

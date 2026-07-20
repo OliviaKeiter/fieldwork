@@ -69,10 +69,20 @@ export async function markDraftSent(draft: FwDraft): Promise<void> {
 
   if (draft.application_id) {
     const eventType = DRAFT_TYPE_TO_EVENT[draft.type] ?? 'note';
+    // Application-question answers carry their question as a "Q: …" first line (the
+    // DraftPanel bodyPrefix) — surface it in the event so the timeline says WHICH question
+    // was sent, not just that one was. The full Q&A body stays viewable in History.
+    let eventBody = `${DRAFT_TYPE_LABEL[draft.type]} marked sent`;
+    if (draft.type === 'application_question') {
+      const question = draft.body.match(/^Q:\s*(.+)$/m)?.[1]?.trim();
+      if (question) {
+        eventBody += ` — Q: ${question.length > 80 ? `${question.slice(0, 80)}…` : question}`;
+      }
+    }
     const { error: eventError } = await supabase.from('fw_events').insert({
       application_id: draft.application_id,
       type: eventType,
-      body: `${DRAFT_TYPE_LABEL[draft.type]} marked sent`,
+      body: eventBody,
       occurred_at: sentAt,
     } as never);
     if (eventError) throw eventError;

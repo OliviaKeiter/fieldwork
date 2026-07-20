@@ -22,8 +22,14 @@ import type { ResumeContact } from './resume';
 
 export interface CoverLetterInput {
   contact: ResumeContact;
-  /** Letter body text — split into paragraphs on blank lines. */
+  /** Letter body text — split into paragraphs on blank lines. Any trailing sign-off in it
+   * is stripped before rendering (see stripSignOff); the rendered sign-off always comes
+   * from the two fields below. */
   body: string;
+  /** Closing line, e.g. "Best wishes,". Falls back to the default. */
+  signOff?: string;
+  /** Signature name under the closing line. Falls back to the contact's name. */
+  signatureName?: string;
   /** Letter date; defaults to today (local). */
   date?: Date;
 }
@@ -44,16 +50,52 @@ function bodyParagraphs(body: string): string[] {
     .filter(Boolean);
 }
 
-/** True when the draft already ends with its own sign-off (e.g. "Best,\nJane Doe") — the
- * generated drafts usually do, and rendering a second sign-off block would double it. */
-function hasSignOff(paragraphs: string[], name: string | null): boolean {
-  if (!name || paragraphs.length === 0) return false;
-  const tail = paragraphs.slice(-2).join(' ').toLowerCase();
-  return tail.includes(name.trim().toLowerCase());
-}
-
 const DEFAULT_GREETING = 'Dear Hiring Team,';
-const DEFAULT_SIGNOFF = 'Best wishes,';
+export const DEFAULT_SIGNOFF = 'Best wishes,';
+
+const CLOSER_RE =
+  /^(best(\s+wishes|\s+regards)?|sincerely(\s+yours)?|warm\s+regards|warmly|kind\s+regards|regards|respectfully(\s+yours)?|thanks|thank\s+you|cheers|all\s+the\s+best|with\s+(gratitude|appreciation|thanks|enthusiasm))\s*,?$/i;
+
+/** Removes a trailing sign-off ("Best wishes,\nJane Doe", or either half alone) from the
+ * body text. The rendered letter ALWAYS gets its sign-off from CoverLetterInput's own
+ * fields, so one left in the text would print twice — the old name-matching heuristic
+ * doubled exactly when the contact name failed to parse. This is its stricter inverse:
+ * strip from the body, render from the fields, no detection needed at render time.
+ *
+ * Deliberately conservative: a bare short line is only treated as a signature when a
+ * closer line precedes it or it equals the known name, so real closing sentences
+ * ("Thank you for your consideration.") survive untouched. */
+export function stripSignOff(body: string, name?: string | null): string {
+  const lines = body.trimEnd().split('\n');
+  const isBlank = (s: string) => !s.trim();
+  const nameNorm = name?.trim().toLowerCase() || null;
+
+  let end = lines.length;
+  while (end > 0 && isBlank(lines[end - 1])) end--;
+
+  // Tentative signature line: short, capitalized, no sentence punctuation.
+  let sigEnd = end;
+  if (end > 0) {
+    const t = lines[end - 1].trim();
+    const looksLikeName =
+      !/[.!?:]$/.test(t) &&
+      t.split(/\s+/).length <= 4 &&
+      (nameNorm ? t.toLowerCase() === nameNorm : /^[A-Z][\w.'-]*(\s+[A-Z][\w.'-]*){0,3}$/.test(t));
+    if (looksLikeName) sigEnd = end - 1;
+  }
+
+  let closerEnd = sigEnd;
+  while (closerEnd > 0 && isBlank(lines[closerEnd - 1])) closerEnd--;
+  const hasCloser = closerEnd > 0 && CLOSER_RE.test(lines[closerEnd - 1].trim());
+
+  if (hasCloser) {
+    end = closerEnd - 1;
+  } else if (sigEnd < end && nameNorm && lines[end - 1].trim().toLowerCase() === nameNorm) {
+    end = sigEnd;
+  }
+  while (end > 0 && isBlank(lines[end - 1])) end--;
+  return lines.slice(0, end).join('\n');
+}
 
 /** True when the first body paragraph is already a salutation (the user typed their own
  * "Dear Jane," at the top, or the model opened with one) — so we don't stack two. */
@@ -67,8 +109,10 @@ export async function buildCoverLetterDocx(
   style: ResumeStyle = DEFAULT_RESUME_STYLE
 ): Promise<Blob> {
   const spec = getTemplateSpec(style);
-  const paragraphs = bodyParagraphs(input.body);
   const name = input.contact.name;
+  const paragraphs = bodyParagraphs(stripSignOff(input.body, input.signatureName ?? name));
+  const signOffText = input.signOff?.trim() || DEFAULT_SIGNOFF;
+  const signatureName = input.signatureName?.trim() || name || '';
 
   const children: Paragraph[] = [
     // Identical name/contact header to the resume for this layout+color.
@@ -99,17 +143,16 @@ export async function buildCoverLetterDocx(
     )
   );
 
-  if (!hasSignOff(paragraphs, name)) {
-    children.push(
-      new Paragraph({
-        spacing: { before: 160, after: 40 },
-        children: [new TextRun({ text: DEFAULT_SIGNOFF, size: 20, color: spec.body })],
-      }),
-      new Paragraph({
-        children: [new TextRun({ text: name ?? '', bold: true, size: 20, color: spec.accent })],
-      })
-    );
-  }
+  // The sign-off block always renders from the input fields — never from the body.
+  children.push(
+    new Paragraph({
+      spacing: { before: 160, after: 40 },
+      children: [new TextRun({ text: signOffText, size: 20, color: spec.body })],
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: signatureName, bold: true, size: 20, color: spec.accent })],
+    })
+  );
 
   const doc = new Document({
     sections: [{ properties: { page: { margin: spec.margins } }, children }],
@@ -153,12 +196,13 @@ export function renderCoverLetterPrintHtml(
   const fontStack =
     spec.font === 'Georgia' ? `Georgia, 'Times New Roman', serif` : `Arial, Helvetica, sans-serif`;
   const contact = contactLine({ contact: input.contact });
-  const paragraphs = bodyParagraphs(input.body);
   const name = input.contact.name;
+  const paragraphs = bodyParagraphs(stripSignOff(input.body, input.signatureName ?? name));
+  const signOffText = input.signOff?.trim() || DEFAULT_SIGNOFF;
+  const signatureName = input.signatureName?.trim() || name || '';
   const greeting = hasGreeting(paragraphs) ? '' : `<p class="letter-greeting">${DEFAULT_GREETING}</p>`;
-  const signOff = hasSignOff(paragraphs, name)
-    ? ''
-    : `<p class="letter-signoff">${DEFAULT_SIGNOFF}</p><p class="letter-signature">${escapeHtml(name ?? '')}</p>`;
+  // Always from the input fields, never detected in the body (see stripSignOff).
+  const signOff = `<p class="letter-signoff">${escapeHtml(signOffText)}</p><p class="letter-signature">${escapeHtml(signatureName)}</p>`;
 
   return `<!doctype html>
 <html>

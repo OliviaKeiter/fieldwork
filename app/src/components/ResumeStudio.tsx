@@ -275,12 +275,29 @@ export default function ResumeStudio({
 
   function handlePrint() {
     setPrintState('working');
+    const finalContent = currentContent();
     // Persist the final edited content on this export path too — non-fatal.
-    saveResumeContent(application.id, currentContent()).catch(() => {});
+    saveResumeContent(application.id, finalContent).catch(() => {});
     // Give React a tick to paint #resume-print-root before invoking the print dialog.
-    setTimeout(() => {
+    setTimeout(async () => {
       window.print();
       setPrintState('idle');
+      // Log this export exactly like the .docx path: filename + full-text snapshot on the
+      // timeline. Runs after the (blocking) print dialog closes; a cancelled dialog can't
+      // be detected, so a cancel still logs. `.pdf` because print's destination is
+      // "Save as PDF".
+      try {
+        const profile = await getProfile();
+        const filename = resolveFileName(
+          profile?.file_name_pattern,
+          application,
+          finalContent.contact.name
+        ).replace(/\.docx$/i, '.pdf');
+        await recordResumeBuilt(application.id, filename, finalContent);
+        onBuilt?.();
+      } catch {
+        /* non-fatal — the content itself was already saved above */
+      }
     }, 50);
   }
 

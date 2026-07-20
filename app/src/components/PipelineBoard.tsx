@@ -4,11 +4,14 @@ import { supabase } from '../lib/supabase';
 import {
   getBoardColumns,
   getBoardPrefs,
+  getWhimsyLevel,
   upsertSetting,
   DEFAULT_BOARD_PREFS,
   type BoardPrefs,
   type BoardSort,
+  type WhimsyLevel,
 } from '../lib/settings';
+import { starBurst } from '../lib/celebrate';
 import { setStatus, recordRejection, passApplication } from '../lib/applications';
 import { STATUS_ORDER, STATUS_LABEL } from '../lib/pipeline';
 import { agingLabel, parseDate } from '../lib/dateUtils';
@@ -48,6 +51,7 @@ export default function PipelineBoard() {
   const [pendingRejection, setPendingRejection] = useState<FwApplication | null>(null);
   const [prefs, setPrefs] = useState<BoardPrefs>(DEFAULT_BOARD_PREFS);
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
+  const [whimsy, setWhimsy] = useState<WhimsyLevel>('gentle');
 
   /** Updates board prefs in state and persists fire-and-forget — a failed save should
    * never block the board (same pattern as the whimsy toggle). */
@@ -59,11 +63,12 @@ export default function PipelineBoard() {
   const load = useCallback(async () => {
     setState('loading');
     try {
-      const [appsRes, eventsRes, cols, storedPrefs] = await Promise.all([
+      const [appsRes, eventsRes, cols, storedPrefs, whimsyLevel] = await Promise.all([
         supabase.from('fw_applications').select('*'),
         supabase.from('fw_events').select('application_id, occurred_at'),
         getBoardColumns(STATUS_ORDER),
         getBoardPrefs().catch(() => DEFAULT_BOARD_PREFS),
+        getWhimsyLevel().catch((): WhimsyLevel => 'gentle'),
       ]);
       if (appsRes.error) throw appsRes.error;
       if (eventsRes.error) throw eventsRes.error;
@@ -80,6 +85,7 @@ export default function PipelineBoard() {
       setLastEventByApp(latest);
       setColumns(cols);
       setPrefs(storedPrefs);
+      setWhimsy(whimsyLevel);
       setState('ready');
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Failed to load the pipeline.');
@@ -171,7 +177,11 @@ export default function PipelineBoard() {
     updatePrefs({ ...prefs, hidden: [...prefs.hidden, ...empty] });
   }
 
-  async function commitMove(app: FwApplication, newStatus: FwStatus) {
+  async function commitMove(
+    app: FwApplication,
+    newStatus: FwStatus,
+    dropPoint?: { x: number; y: number }
+  ) {
     if (newStatus === app.status) return;
     if (newStatus === 'rejected') {
       setPendingRejection(app);
@@ -179,6 +189,11 @@ export default function PipelineBoard() {
     }
     try {
       await setStatus(app.id, newStatus, app.status);
+      // A card landing on Offer (or Accepted) earns a burst of stars, right
+      // where it landed. Whimsy-gated per SPEC §7; never fires on bad news.
+      if ((newStatus === 'offer' || newStatus === 'accepted') && whimsy !== 'off') {
+        starBurst(dropPoint?.x ?? window.innerWidth / 2, dropPoint?.y ?? window.innerHeight / 3);
+      }
       await load();
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Could not move that card.');
@@ -320,7 +335,7 @@ export default function PipelineBoard() {
             onDrop={(e) => {
               e.preventDefault();
               const app = applications.find((a) => a.id === dragId);
-              if (app) commitMove(app, col as FwStatus);
+              if (app) commitMove(app, col as FwStatus, { x: e.clientX, y: e.clientY });
               setDragId(null);
             }}
             className="flex w-64 shrink-0 flex-col rounded-xl border border-border bg-surface/60 p-3"

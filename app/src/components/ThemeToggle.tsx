@@ -19,6 +19,15 @@ export default function ThemeToggle() {
     const initial = stored ?? 'dark';
     setTheme(initial);
     applyTheme(initial);
+
+    // The command palette can also flip the theme; keep this button's label
+    // honest when it does.
+    function onExternalToggle(e: Event) {
+      const next = (e as CustomEvent<Theme>).detail;
+      if (next === 'dark' || next === 'light') setTheme(next);
+    }
+    window.addEventListener('fieldwork:theme', onExternalToggle);
+    return () => window.removeEventListener('fieldwork:theme', onExternalToggle);
   }, []);
 
   function toggle() {
