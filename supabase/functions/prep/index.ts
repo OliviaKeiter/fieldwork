@@ -143,7 +143,7 @@ Call emit_prep_doc with your result — do not respond in plain text.`;
       },
       body: JSON.stringify({
         model,
-        max_tokens: 3000,
+        max_tokens: 8000,
         system: systemPrompt,
         messages: [{ role: "user", content: `Build the ${roundType} interview prep doc now.` }],
         tools: [PREP_TOOL],
@@ -157,11 +157,21 @@ Call emit_prep_doc with your result — do not respond in plain text.`;
     }
 
     const payload = await res.json();
+    if (payload.stop_reason === "max_tokens") {
+      throw new Error(
+        "Prep doc generation ran out of output tokens before finishing (stop_reason max_tokens) — the tool payload would be truncated. Not saving a partial doc; retry, and if it recurs raise max_tokens further."
+      );
+    }
     const toolUse = (payload.content ?? []).find((b: { type: string }) => b.type === "tool_use");
     if (!toolUse) {
       throw new Error("Claude did not return a prep doc.");
     }
     const markdown = String((toolUse.input as { markdown?: string }).markdown ?? "");
+    if (!markdown.trim()) {
+      throw new Error(
+        "Claude returned an empty prep doc (likely a truncated or malformed tool payload). Not saving it — retry."
+      );
+    }
 
     let savedDoc;
     if (existingDoc) {
